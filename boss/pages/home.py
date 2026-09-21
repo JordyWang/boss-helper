@@ -81,15 +81,24 @@ class HomePage(BasePage):
     def scroll(self) -> None:
         self.swipe_up()
 
-    def back_to_list(self, max_backs: int = 4) -> bool:
-        """连续返回,直到回到职位列表页(出现职位卡片)。
-        投递后层级为:会话页 → 详情页 → 列表,通常需返回 2 次。"""
-        for i in range(max_backs):
-            if self.exists(S.HOME["job_card"], timeout=1.5):
+    def back_to_list(self, max_backs: int = 5) -> bool:
+        """连续返回,直到确认回到 MainActivity 且推荐列表卡片可见。
+        注意:ChatRoomActivity 里也嵌有 view_job_card,单看元素会误判。"""
+        for _ in range(max_backs):
+            if self._is_on_list():
                 return True
             self.d.press("back")
             self.human_delay()
-        ok = self.exists(S.HOME["job_card"], timeout=1.5)
+        ok = self._is_on_list()
         if not ok:
             self.log.warning("连续返回 %d 次仍未回到列表", max_backs)
         return ok
+
+    def _is_on_list(self) -> bool:
+        try:
+            act = self.d.app_current().get("activity") or ""
+        except Exception:
+            return False
+        if "MainActivity" not in act:
+            return False
+        return self.d(**S.HOME["job_card"]).count > 0

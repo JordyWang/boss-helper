@@ -22,6 +22,9 @@ from boss.state import State
 def cmd_run(args) -> int:
     log = setup_logger()
     cfg = load_config(args.config)
+    if args.limit is not None:
+        cfg.limits.max_apply_per_run = args.limit
+        log.info("覆盖单次上限 -> %d", args.limit)
 
     from boss.device import connect, ensure_app
     from boss.engine import ApplyEngine
@@ -177,7 +180,9 @@ def main(argv=None) -> int:
     parser.add_argument("--config", default="config.yaml", help="配置文件路径")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    sub.add_parser("run", help="执行批量沟通投递").set_defaults(func=cmd_run)
+    runp = sub.add_parser("run", help="执行批量沟通投递")
+    runp.add_argument("--limit", type=int, default=None, help="覆盖 config 中的 max_apply_per_run(仅本次)")
+    runp.set_defaults(func=cmd_run)
     sub.add_parser("dump", help="dump 当前界面用于校准选择器").set_defaults(func=cmd_dump)
     sub.add_parser("status", help="查看今日投递状态").set_defaults(func=cmd_status)
     sub.add_parser("reset-today", help="重置今日计数").set_defaults(func=cmd_reset_today)

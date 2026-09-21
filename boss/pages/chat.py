@@ -116,6 +116,19 @@ class ChatPage(BasePage):
         self.log.info("已发送消息: %s", text)
         return True
 
+    def handle_resume_dialog(self, send_resume: bool) -> bool:
+        """招聘者索要附件简历弹窗:send_resume=true 点"同意",否则点"拒绝"。
+        弹窗存在则处理后返回 True,不存在返回 False。"""
+        agree = S.DETAIL["resume_agree_btn"]
+        reject = S.DETAIL["resume_reject_btn"]
+        if not self.exists(agree, timeout=1.5):
+            return False
+        btn = agree if send_resume else reject
+        label = "同意" if send_resume else "拒绝"
+        self.log.info("检测到索要简历弹窗 → 点 %s", label)
+        self.click(btn, timeout=3.0)
+        return True
+
     def send_greeting(self, messages: List[str]) -> bool:
         """随机选一条招呼语并发送。"""
         if not messages:

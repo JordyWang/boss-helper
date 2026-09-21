@@ -36,7 +36,10 @@ DETAIL = {
     "communicate_btn": {"resourceId": "com.hpbr.bosszhipin:id/btn_chat"},
     # 招聘者姓名
     "boss_name": {"resourceId": "com.hpbr.bosszhipin:id/tv_boss_name"},
-    # 沟通后可能弹出的确认按钮(出现时才处理)
+    # 沟通后可能弹出的"附件简历请求"对话框(招聘者索要简历)
+    "resume_agree_btn": {"resourceId": "com.hpbr.bosszhipin:id/tv_dialog_btn_right"},
+    "resume_reject_btn": {"resourceId": "com.hpbr.bosszhipin:id/tv_dialog_btn_left"},
+    # 兼容旧字段
     "confirm_send_resume": {"text": "发送简历"},
     "continue_chat": {"textContains": "继续"},
     "close_popup": {"description": "关闭"},
