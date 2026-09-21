@@ -96,6 +96,9 @@ def cmd_op(args) -> int:
         home.back()
         log.info("已返回")
 
+    elif op == "home":
+        log.info("back_to_list -> %s", home.back_to_list())
+
     else:
         log.error("未知操作: %s", op)
         return 1
@@ -142,7 +145,7 @@ def main(argv=None) -> int:
     op = sub.add_parser("op", help="单独执行一个原子操作(调试用)")
     op.add_argument(
         "op",
-        choices=["recommend", "detail", "read", "communicate", "send", "back"],
+        choices=["recommend", "detail", "read", "communicate", "send", "back", "home"],
         help="要执行的操作",
     )
     op.add_argument("--index", type=int, default=0, help="detail 操作点第几个卡片")

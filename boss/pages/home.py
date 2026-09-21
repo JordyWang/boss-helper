@@ -25,7 +25,8 @@ class JobCard:
 
     @property
     def title(self) -> str:
-        return self._child_text(S.HOME["job_card_title"])
+        # tv_position_name 末尾常带图标占位符(如 &@),清掉以免污染去重 key
+        return self._child_text(S.HOME["job_card_title"]).strip().rstrip("&@・·").strip()
 
     @property
     def salary(self) -> str:
@@ -79,3 +80,16 @@ class HomePage(BasePage):
 
     def scroll(self) -> None:
         self.swipe_up()
+
+    def back_to_list(self, max_backs: int = 4) -> bool:
+        """连续返回,直到回到职位列表页(出现职位卡片)。
+        投递后层级为:会话页 → 详情页 → 列表,通常需返回 2 次。"""
+        for i in range(max_backs):
+            if self.exists(S.HOME["job_card"], timeout=1.5):
+                return True
+            self.d.press("back")
+            self.human_delay()
+        ok = self.exists(S.HOME["job_card"], timeout=1.5)
+        if not ok:
+            self.log.warning("连续返回 %d 次仍未回到列表", max_backs)
+        return ok

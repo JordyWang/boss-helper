@@ -66,7 +66,7 @@ class ApplyEngine:
 
         if not self.detail.communicate():
             self.log.warning("未找到'立即沟通'按钮,跳过: %s", detail_title)
-            self.home.back()
+            self.home.back_to_list()
             return applied_this_run
 
         self.detail.handle_after_communicate()
@@ -85,7 +85,7 @@ class ApplyEngine:
             detail_salary,
         )
 
-        self.home.back()
+        self.home.back_to_list()
         return applied_this_run
 
     def run(self) -> int:

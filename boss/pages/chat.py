@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import random
+import re
 import time
 from typing import List, Optional
 
@@ -21,6 +22,50 @@ class ChatPage(BasePage):
             return None
         return box
 
+    def _fill_text(self, box, text: str) -> bool:
+        """稳健写入文字:先聚焦,send_keys 为主、set_text 兜底,带重试。
+        该机型 uiautomator 服务偶发丢目标,故多次重试。"""
+        for attempt in range(3):
+            try:
+                box.click()
+                time.sleep(0.5)
+            except Exception:
+                pass
+            # 主路径:FastInput 输入法直接输入到当前聚焦框,不依赖二次查找元素
+            try:
+                self.d.send_keys(text, clear=True)
+                time.sleep(0.6)
+                if self._input_contains(text):
+                    return True
+            except Exception as exc:
+                self.log.debug("send_keys 失败(第%d次): %s", attempt + 1, repr(exc)[:60])
+            # 兜底:对元素 set_text
+            try:
+                box.set_text(text)
+                time.sleep(0.6)
+                if self._input_contains(text):
+                    return True
+            except Exception as exc:
+                self.log.debug("set_text 失败(第%d次): %s", attempt + 1, repr(exc)[:60])
+            time.sleep(1.0)
+        return self._input_contains(text)
+
+    def _input_contains(self, text: str) -> bool:
+        """从层级中读取输入框的 text 属性,确认目标文字已写入。"""
+        try:
+            xml = self.d.dump_hierarchy()
+        except Exception:
+            return False
+        m = re.search(
+            r'<node[^>]*resource-id="com\.hpbr\.bosszhipin:id/editText_with_scrollbar"[^>]*>',
+            xml,
+        )
+        if not m:
+            return False
+        node = m.group(0)
+        tm = re.search(r'text="([^"]*)"', node)
+        return bool(tm) and text[:8] in tm.group(1)
+
     def _find_send_button(self, input_bounds: dict):
         """发送按钮无 resource-id:输入行内、输入框右侧、可点击的最右 ImageView。
         必须在已输入文字时调用(空输入时该位置是 +号 mMoreIcon)。"""
@@ -38,10 +83,7 @@ class ChatPage(BasePage):
         box = self._input()
         if box is None:
             return False
-        box.click()
-        box.set_text(text)
-        time.sleep(0.6)
-        return True
+        return self._fill_text(box, text)
 
     def send_message(self, text: str) -> bool:
         """在会话框输入并发送一条消息。返回是否成功点击发送。"""
@@ -51,11 +93,17 @@ class ChatPage(BasePage):
         if box is None:
             return False
 
-        box.click()
-        box.set_text(text)
-        time.sleep(0.8)
+        if not self._fill_text(box, text):
+            self.log.error("文字写入失败,放弃发送(避免发出空/错消息)")
+            return False
 
-        bounds = box.info["bounds"]
+        # 重新取输入框边界(键盘弹起后位置会变)
+        try:
+            bounds = self.el(S.CHAT["input"]).info["bounds"]
+        except Exception:
+            self.log.error("无法获取输入框边界,放弃发送")
+            return False
+
         btn = self._find_send_button(bounds)
         if btn is None:
             self.log.warning("未定位到发送按钮,改用 IME send 动作兜底")
