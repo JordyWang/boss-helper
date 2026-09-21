@@ -42,6 +42,41 @@ _TIMESTAMP_FIELDS = (
 )
 
 
+def conversation_id_component(label: str, value: object) -> str:
+    """把会话身份字段编码成可读的 ``label=value`` 片段。
+
+    会话 ID 会以 ``|`` 分隔字段，而公司/职位名称本身偶尔也会包含竖线。
+    统一在这里转义，保证消息列表页和聊天页生成的 ID 可以互相匹配。
+    """
+    normalized = normalize_message_value(value)
+    if not normalized:
+        return ""
+    escaped = normalized.replace("\\", "\\\\").replace("|", "\\|")
+    return f"{label}={escaped}"
+
+
+def make_conversation_id(
+    company: object = "",
+    job_title: object = "",
+    recruiter: object = "",
+    subtitle: object = "",
+) -> str:
+    """生成稳定的本地会话 ID。
+
+    当前 Boss APK 没有把官方 ``conversationId`` 暴露给 UI，因此以消息列表
+    中相对稳定的“公司 + 职位 + 联系人”作为本地匹配键。公司和职位都缺失
+    时才使用未拆分的副标题，避免把一个未知字段误标成公司。
+    """
+    parts = [
+        conversation_id_component("company", company),
+        conversation_id_component("job_title", job_title),
+        conversation_id_component("recruiter", recruiter),
+    ]
+    if not normalize_message_value(company) and not normalize_message_value(job_title):
+        parts.append(conversation_id_component("subtitle", subtitle))
+    return "|".join(part for part in parts if part)
+
+
 def normalize_message_value(value: object) -> str:
     """规范化用于身份计算的值，但保留单词之间的空格。"""
     if value is None:
@@ -143,7 +178,9 @@ def deduplicate_messages(
 
 
 __all__ = [
+    "conversation_id_component",
     "deduplicate_messages",
+    "make_conversation_id",
     "message_fingerprint",
     "message_id_value",
     "message_identity",

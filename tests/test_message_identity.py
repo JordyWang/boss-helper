@@ -1,4 +1,5 @@
 import logging
+import textwrap
 import unittest
 
 from boss.config import Timing
@@ -31,6 +32,28 @@ class _ContextDevice:
 
     def __call__(self, **selector):
         return _ContextElement(self.values.get(selector.get("resourceId"), ""))
+
+
+class _MessagesDevice:
+    def __init__(self, xml):
+        self.xml = xml
+
+    def __call__(self, **selector):
+        class _Input:
+            def wait(self, timeout):
+                return True
+
+            @property
+            def info(self):
+                return {"bounds": {"top": 2200}}
+
+        return _Input()
+
+    def window_size(self):
+        return (1080, 2400)
+
+    def dump_hierarchy(self):
+        return self.xml
 
 
 class MessageIdentityTest(unittest.TestCase):
@@ -74,6 +97,25 @@ class MessageIdentityTest(unittest.TestCase):
         )
         self.assertEqual(attrs["id"], "")
         self.assertEqual(attrs["message-id"], "server-1")
+
+    def test_message_reader_excludes_controls_and_decodes_xml_newlines(self):
+        xml = textwrap.dedent(
+            '''
+            <hierarchy>
+              <node text="换电话" resource-id="pkg:id/mTextView" class="android.widget.TextView" bounds="[20,300][100,340]" />
+              <node text="09-11 15:25" resource-id="pkg:id/tv_text" class="android.widget.TextView" bounds="[100,400][300,440]" />
+              <node text="真实消息&#10;第二行" resource-id="pkg:id/tv_text" class="android.widget.TextView" bounds="[100,500][500,600]" />
+              <node text="复制微信号" resource-id="pkg:id/tv_button" class="android.widget.TextView" bounds="[100,700][500,740]" />
+            </hierarchy>
+            '''
+        )
+        page = ChatPage(
+            _MessagesDevice(xml),
+            Timing((0, 0), (0, 0)),
+            logging.getLogger("test-message-reader"),
+        )
+        messages = page.read_messages(settle_seconds=0)
+        self.assertEqual([message.text for message in messages], ["真实消息\n第二行"])
 
     def test_content_fingerprint_normalizes_whitespace_but_keeps_sender(self):
         first = Message("你好  世界", "them", "text")

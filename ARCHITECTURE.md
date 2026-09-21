@@ -74,6 +74,31 @@ APK（14.160）提供给 UI hierarchy 的只有控件 `resource-id`、`index`、
 `conversationId`；若能从接口取得服务端会话 ID，可通过 `--conversation-id`
 覆盖。两个完全相同且没有时间戳的消息仍无法仅靠 UI 可靠区分。
 
+## 会话管理
+
+`op conversations` 是只读会话管理入口。默认只进入消息列表并记录当前可见
+会话的 ID，不会自动逐个打开聊天；也可以显式选择一个 ID，或明确指定数量：
+
+```bash
+# 只列出当前可见会话 ID（不打开聊天）
+python3 main.py op conversations
+python3 main.py op conversations --list-only
+
+# 按列表 ID 精确匹配并只打开/保存一个会话
+python3 main.py op conversations \
+  --conversation-id 'company=三横科技|job_title=全栈工程师|recruiter=丘先生'
+
+# 明确要求时才打开前 N 个会话
+python3 main.py op conversations --count 3
+```
+
+匹配会在当前屏和有限滚动范围内进行（可用 `--max-scrolls` 调整），找不到
+目标时停止，不会无限遍历历史会话。归档 JSON 以消息列表生成的
+`conversation_id` 为主键，并另外保存聊天页解析出的 `chat_conversation_id`，
+这样聊天页副标题变化不会破坏后续按 ID 回查。当前 APK 没有暴露官方会话 ID，
+所以这里的 ID 是本地组合标识；若后续 UI/API 提供服务端 ID，会使用
+`server:<id>` 命名空间并优先匹配。
+
 ## 当前真机与 APK 基线
 
 最近一次从已连接设备读取（2026-09-22）：

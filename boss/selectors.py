@@ -71,6 +71,21 @@ CHAT = {
     "chat_flag": {"resourceId": "com.hpbr.bosszhipin:id/editText_with_scrollbar"},
 }
 
+# ---------- 会话列表 ----------
+# 已用真机 dump 校准(Chat/MainActivity, APK 14.160 / 2026-09-22)。
+CONVERSATIONS = {
+    # 底部导航“消息”Tab
+    "tab": {"resourceId": "com.hpbr.bosszhipin:id/cl_tab_3"},
+    # 会话列表及其直接子行。每行没有业务 resource-id，但 clickable=true。
+    "list": {"resourceId": "com.hpbr.bosszhipin:id/recyclerView"},
+    "row": {"className": "android.view.ViewGroup"},
+    "name": {"resourceId": "com.hpbr.bosszhipin:id/tv_name"},
+    "position": {"resourceId": "com.hpbr.bosszhipin:id/tv_position"},
+    "preview": {"resourceId": "com.hpbr.bosszhipin:id/tv_msg"},
+    "salary": {"resourceId": "com.hpbr.bosszhipin:id/tv_time"},
+    "time": {"resourceId": "com.hpbr.bosszhipin:id/tv_time_v2"},
+}
+
 # 全局弹窗关闭按钮。刻意保守:只匹配明确的关闭图标(content-desc=关闭),
 # 不用"取消/跳过"等泛文字,避免在会话页等场景误点造成副作用。
 GLOBAL_POPUP_CLOSE = [

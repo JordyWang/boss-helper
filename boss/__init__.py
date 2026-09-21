@@ -5,6 +5,7 @@ __version__ = "0.2.0"
 from .domain import Job, JobPreview, Message, RunSummary
 from .artifacts import RunArtifacts, RunInProgressError
 from .message_identity import (
+    make_conversation_id,
     deduplicate_messages,
     message_fingerprint,
     message_id_value,
@@ -20,6 +21,7 @@ __all__ = [
     "RunInProgressError",
     "RunSummary",
     "deduplicate_messages",
+    "make_conversation_id",
     "message_fingerprint",
     "message_id_value",
     "message_identity",

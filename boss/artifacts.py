@@ -13,7 +13,7 @@ import threading
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Any, IO, Iterable, Optional, Union
+from typing import Any, IO, Iterable, Mapping, Optional, Union
 
 from .message_identity import (
     message_id_value,
@@ -179,6 +179,13 @@ class RunArtifacts:
         kind = Path(name).stem if name else "messages"
         return self.next_path(kind, extension)
 
+    def conversation_path(self, name: Optional[str] = None) -> str:
+        """分配单个会话归档路径。"""
+        extension = Path(name).suffix.lstrip(".") if name else ""
+        extension = extension or "json"
+        kind = Path(name).stem if name else "conversation"
+        return self.next_path(kind, extension)
+
     def save_screenshot(self, device: object, name: Optional[str] = None) -> str:
         path = self.screenshot_path(name)
         device.screenshot(path)
@@ -203,6 +210,12 @@ class RunArtifacts:
         内容指纹；后者不是官方唯一 ID，详见 :mod:`boss.message_identity`。
         """
         path = self.messages_path(name)
+        rows = self._message_rows(messages, conversation_id)
+        self._atomic_json_write(path, rows)
+        return path
+
+    @staticmethod
+    def _message_rows(messages: Iterable[Any], conversation_id: str = "") -> list:
         rows = []
         for message in messages:
             text = message_value(message, "text", "")
@@ -223,6 +236,26 @@ class RunArtifacts:
                     "dedup_source": dedup_source,
                 }
             )
+        return rows
+
+    def save_conversation(
+        self,
+        conversation: Mapping[str, Any],
+        name: Optional[str] = None,
+    ) -> str:
+        """原子保存一个会话的摘要、上下文和完整消息列表。"""
+        path = self.conversation_path(name)
+        payload = dict(conversation)
+        conversation_id = str(payload.get("conversation_id", "") or "")
+        if "messages" in payload:
+            payload["messages"] = self._message_rows(
+                payload.get("messages") or [], conversation_id
+            )
+        self._atomic_json_write(path, payload)
+        return path
+
+    @staticmethod
+    def _atomic_json_write(path: str, payload: Any) -> None:
         # 和状态/APK 基线一样，先写同目录临时文件并原子替换，避免进程
         # 中断留下半个 JSON，后续去重读取时误判为有效数据。
         directory = os.path.dirname(os.path.abspath(path))
@@ -231,7 +264,7 @@ class RunArtifacts:
         )
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as fh:
-                json.dump(rows, fh, ensure_ascii=False, indent=2)
+                json.dump(payload, fh, ensure_ascii=False, indent=2)
                 fh.write("\n")
                 fh.flush()
                 os.fsync(fh.fileno())
@@ -242,7 +275,6 @@ class RunArtifacts:
             except OSError:
                 pass
             raise
-        return path
 
     def close(self) -> None:
         """释放串行执行锁。"""

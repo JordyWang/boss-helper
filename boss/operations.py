@@ -14,7 +14,9 @@ from .config import AppConfig
 from .device import health as device_health
 from .domain import Job
 from .filters import JobFilter
+from .message_identity import normalize_message_value
 from .pages.chat import ChatPage
+from .pages.conversations import ConversationListPage
 from .pages.home import HomePage
 from .pages.job_detail import JobDetailPage
 from .ports import StatePort
@@ -31,6 +33,7 @@ class OperationContext:
     home: Optional[HomePage] = None
     detail: Optional[JobDetailPage] = None
     chat: Optional[ChatPage] = None
+    conversations: Optional[ConversationListPage] = None
     state: Optional[StatePort] = None
     artifacts: Optional[Any] = None
 
@@ -93,6 +96,12 @@ def _chat(ctx: OperationContext) -> ChatPage:
     if ctx.chat is None:
         raise RuntimeError("该操作未初始化会话页")
     return ctx.chat
+
+
+def _conversations(ctx: OperationContext) -> ConversationListPage:
+    if ctx.conversations is None:
+        raise RuntimeError("该操作未初始化会话列表页")
+    return ctx.conversations
 
 
 def op_recommend(ctx: OperationContext) -> int:
@@ -183,6 +192,259 @@ def op_messages(ctx: OperationContext) -> int:
     return 0
 
 
+def _conversation_entry_id(entry: Any) -> str:
+    """读取列表项 ID，并兼容旧的 ``context_id`` 字段。"""
+    for name in ("conversation_id", "context_id", "local_id"):
+        try:
+            value = getattr(entry, name, "")
+            if callable(value):
+                value = value()
+        except Exception:
+            value = ""
+        if value:
+            return str(value)
+    return ""
+
+
+def _conversation_entry_key(entry: Any) -> str:
+    identity = _conversation_entry_id(entry)
+    if identity:
+        return identity
+    try:
+        value = getattr(entry, "key", "")
+        if callable(value):
+            value = value()
+    except Exception:
+        value = ""
+    return str(value or f"object:{id(entry)}")
+
+
+def _conversation_entry_dict(entry: Any) -> dict:
+    try:
+        value = entry.as_dict()
+        return dict(value) if isinstance(value, dict) else {}
+    except Exception:
+        return {}
+
+
+def _safe_chat_value(chat: Any, name: str, default: Any) -> Any:
+    try:
+        value = getattr(chat, name, default)
+        if callable(value):
+            value = value()
+        return default if value is None else value
+    except Exception:
+        return default
+
+
+def _capture_conversation(
+    ctx: OperationContext,
+    listing: ConversationListPage,
+    chat: ChatPage,
+    entry: Any,
+    ordinal: int,
+    requested_id: str = "",
+) -> Tuple[bool, bool]:
+    """打开一个列表项、读取并保存，然后返回 ``(saved, back_ok)``。"""
+    entry_id = _conversation_entry_id(entry)
+    label = getattr(entry, "name", "") or entry_id or "<未知会话>"
+    if not listing.open_conversation(entry):
+        ctx.log.warning("会话打开失败，跳过: %s", label)
+        return False, True
+
+    saved = False
+    back_ok = True
+    try:
+        if not chat.in_chat():
+            raise RuntimeError("打开后未进入聊天页")
+        messages = list(chat.read_messages() or [])
+        context = _safe_chat_value(chat, "conversation_context", {})
+        if not isinstance(context, dict):
+            context = {}
+        chat_id = str(_safe_chat_value(chat, "conversation_id", "") or "")
+
+        # 列表 ID 是匹配主键；聊天页标题可能因职位/公司展示变化而变化，
+        # 只能作为辅助信息保存，不能覆盖列表中已经匹配到的 ID。
+        conversation_id = entry_id or chat_id
+        if not conversation_id:
+            ctx.log.warning("会话没有可用 ID，将保存但无法稳定回查: %s", label)
+        artifacts = ctx.artifacts or getattr(ctx.log, "run_artifacts", None)
+        if artifacts is None:
+            raise RuntimeError("当前运行没有归档上下文")
+        preview = _conversation_entry_dict(entry)
+        requested_name = str(getattr(ctx.args, "name", "") or "").strip()
+        archive_name = requested_name or f"conversation_{ordinal:03d}"
+        payload = {
+            "schema_version": 1,
+            "conversation_id": conversation_id,
+            "conversation_id_source": "list" if entry_id else ("chat" if chat_id else "unknown"),
+            "requested_conversation_id": requested_id,
+            "chat_conversation_id": chat_id,
+            "context": context,
+            "list_preview": preview,
+            "messages": messages,
+        }
+        path = artifacts.save_conversation(
+            payload, name=archive_name
+        )
+        saved = True
+        ctx.log.info("会话已保存: %s（%d 条消息，id=%s）", path, len(messages), conversation_id or "-")
+    except Exception as exc:
+        ctx.log.error("读取/保存会话失败[%s]: %s", label, exc)
+    finally:
+        try:
+            back_ok = bool(listing.back_to_list())
+        except Exception as exc:
+            ctx.log.error("返回消息列表异常[%s]: %s", label, exc)
+            back_ok = False
+        if not back_ok:
+            ctx.log.error("无法返回消息列表，停止会话归档")
+    return saved, back_ok
+
+
+def _list_conversation_ids(ctx: OperationContext, listing: ConversationListPage) -> int:
+    """只列出当前可见会话 ID，不点击任何聊天行。"""
+    entries = listing.visible()
+    if not entries:
+        ctx.log.warning("当前没有可读取的会话行")
+        return 0
+    for index, entry in enumerate(entries, 1):
+        ctx.log.info(
+            "会话[%d] id=%s | %s | %s | %s",
+            index,
+            _conversation_entry_id(entry) or "<无稳定ID>",
+            getattr(entry, "name", "") or "<未知联系人>",
+            getattr(entry, "company", "") or "-",
+            getattr(entry, "job_title", "") or "-",
+        )
+    ctx.log.info("已列出 %d 个当前可见会话（未打开聊天）", len(entries))
+    return 0
+
+
+def _archive_first_conversations(
+    ctx: OperationContext,
+    listing: ConversationListPage,
+    chat: ChatPage,
+    target: int,
+    max_scrolls: int,
+) -> int:
+    seen = set()
+    saved = 0
+    scroll_rounds = 0
+    while saved < target and scroll_rounds <= max_scrolls:
+        entries = listing.visible()
+        if not entries:
+            ctx.log.warning("当前没有可读取的会话行")
+            break
+        progress = False
+        for entry in entries:
+            if saved >= target:
+                break
+            key = _conversation_entry_key(entry)
+            if key and key in seen:
+                continue
+            if key:
+                seen.add(key)
+            progress = True
+            ctx.log.info(
+                "打开会话 [%d/%d]: %s | %s | %s | id=%s",
+                saved + 1,
+                target,
+                getattr(entry, "name", "") or "<未知联系人>",
+                getattr(entry, "company", "") or "-",
+                getattr(entry, "job_title", "") or "-",
+                key or "<无稳定ID>",
+            )
+            ok, back_ok = _capture_conversation(ctx, listing, chat, entry, saved + 1)
+            if ok:
+                saved += 1
+            if not back_ok:
+                ctx.log.error("返回列表失败，已停止会话归档")
+                ctx.log.info("会话归档完成: %d/%d", saved, target)
+                return 0 if saved else 1
+
+        if saved >= target:
+            break
+        # 显式 count 模式允许有限滚动查找更多条目，但永远受 max_scrolls
+        # 约束；没有新条目时下一轮会很快结束，不会无限操作设备。
+        if not progress:
+            break
+        if scroll_rounds >= max_scrolls:
+            break
+        listing.scroll()
+        scroll_rounds += 1
+
+    ctx.log.info("会话归档完成: %d/%d", saved, target)
+    return 0 if saved else 1
+
+
+def op_conversations(ctx: OperationContext) -> int:
+    """管理已有会话：列出 ID，或按 ID/显式数量只读归档。"""
+    listing = _conversations(ctx)
+    target_id = str(getattr(ctx.args, "conversation_id", "") or "").strip()
+    list_only = bool(getattr(ctx.args, "list_only", False))
+    count_value = getattr(ctx.args, "count", None)
+
+    # 显式 --count 0 是安全的空操作，连列表都不必打开；没有 --count
+    # 时 count=None，继续走默认“只列 ID”路径。
+    if not target_id and not list_only and count_value is not None:
+        try:
+            if int(count_value) <= 0:
+                ctx.log.info("会话归档数量为 0，跳过")
+                return 0
+        except (TypeError, ValueError):
+            pass
+
+    # 没有明确选择目标时默认只列 ID，避免一次命令把所有聊天逐个打开。
+    if not listing.open_list():
+        ctx.log.error("无法打开消息列表")
+        return 1
+    if list_only or (not target_id and count_value is None):
+        return _list_conversation_ids(ctx, listing)
+    if target_id:
+        max_scrolls = getattr(ctx.args, "max_scrolls", 8)
+        finder = getattr(listing, "find_by_id", None)
+        if callable(finder):
+            try:
+                entry = finder(target_id, max_scrolls=max_scrolls)
+            except TypeError:
+                # 兼容只接受一个位置参数的轻量列表页适配器。
+                entry = finder(target_id)
+        else:
+            # 兼容外部调用方传入的旧列表页实现：只在当前屏查找，绝不
+            # 退化成无界遍历或自动打开其他会话。
+            entry = next(
+                (
+                    item
+                    for item in listing.visible()
+                    if normalize_message_value(_conversation_entry_id(item))
+                    == normalize_message_value(target_id)
+                ),
+                None,
+            )
+        if entry is None:
+            ctx.log.error("未找到会话 ID: %s", target_id)
+            return 1
+        ok, back_ok = _capture_conversation(
+            ctx, listing, _chat(ctx), entry, 1, requested_id=target_id
+        )
+        return 0 if ok and back_ok else 1
+
+    try:
+        target = int(count_value)
+    except (TypeError, ValueError):
+        target = 0
+    if target <= 0:
+        ctx.log.info("会话归档数量为 0，跳过")
+        return 0
+    max_scrolls = getattr(ctx.args, "max_scrolls", None)
+    try:
+        max_scrolls = max(0, int(max_scrolls))
+    except (TypeError, ValueError):
+        max_scrolls = max(2, target + 2)
+    return _archive_first_conversations(ctx, listing, _chat(ctx), target, max_scrolls)
+
+
 def op_back(ctx: OperationContext) -> int:
     _home(ctx).back()
     ctx.log.info("已返回")
@@ -231,7 +493,8 @@ def op_screenshot(ctx: OperationContext) -> int:
 
 def op_scroll(ctx: OperationContext) -> int:
     home = _home(ctx)
-    count = getattr(ctx.args, "count", 1)
+    count = getattr(ctx.args, "count", None)
+    count = 1 if count is None else count
     direction = getattr(ctx.args, "direction", "up")
     for _ in range(count):
         home.scroll(direction)
@@ -354,6 +617,13 @@ OPERATION_SPECS: Dict[str, OperationSpec] = {
     ),
     "messages": OperationSpec(
         "messages", op_messages, "读取聊天消息", side_effect="read", pages=("chat",)
+    ),
+    "conversations": OperationSpec(
+        "conversations",
+        op_conversations,
+        "列出会话 ID，或按 ID/显式数量只读保存对话",
+        side_effect="read",
+        pages=("conversations", "chat"),
     ),
     "back": OperationSpec("back", op_back, "返回上一页", side_effect="navigate", pages=("home",)),
     "home": OperationSpec("home", op_home, "返回职位列表", side_effect="navigate", pages=("home",)),

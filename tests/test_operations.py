@@ -10,14 +10,17 @@ from boss.artifacts import RunArtifacts
 from boss.cli import build_parser, cmd_op
 from boss.config import AppConfig
 from boss.domain import Job
+from boss.domain import Message
 from boss.operations import (
     OPERATION_SPECS,
     OperationContext,
+    op_conversations,
     op_dry_run,
     op_messages,
     op_resume,
 )
 from boss.logger import close_logger
+from boss.pages.conversations import ConversationPreview
 
 
 class _FakeDevice:
@@ -116,6 +119,56 @@ class _MessagesChat:
         return "company=甲公司|job_title=Python工程师|recruiter=甲先生"
 
 
+class _ConversationChat:
+    def __init__(self):
+        self.in_chat_calls = 0
+        self.read_calls = 0
+
+    def in_chat(self):
+        self.in_chat_calls += 1
+        return True
+
+    def read_messages(self):
+        self.read_calls += 1
+        return [Message("你好", "them", "text")]
+
+    def conversation_context(self):
+        return {"company": "聊天页公司", "job_title": "聊天页职位", "recruiter": "聊天页联系人"}
+
+    def conversation_id(self):
+        return "company=聊天页公司|job_title=聊天页职位|recruiter=聊天页联系人"
+
+
+class _ConversationListing:
+    def __init__(self, entries):
+        self.entries = list(entries)
+        self.opened = []
+        self.open_list_calls = 0
+        self.back_calls = 0
+        self.scroll_calls = 0
+
+    def open_list(self):
+        self.open_list_calls += 1
+        return True
+
+    def visible(self):
+        return list(self.entries)
+
+    def find_by_id(self, conversation_id, max_scrolls=8):
+        return next((item for item in self.entries if item.conversation_id == conversation_id), None)
+
+    def open_conversation(self, entry):
+        self.opened.append(entry)
+        return True
+
+    def back_to_list(self):
+        self.back_calls += 1
+        return True
+
+    def scroll(self):
+        self.scroll_calls += 1
+
+
 class OperationRegistryTest(unittest.TestCase):
     def test_registry_declares_expected_operations_and_dependencies(self):
         expected = {
@@ -125,6 +178,7 @@ class OperationRegistryTest(unittest.TestCase):
             "communicate",
             "send",
             "messages",
+            "conversations",
             "back",
             "home",
             "health",
@@ -281,6 +335,88 @@ class OperationExecutionTest(unittest.TestCase):
                     "company=甲公司|job_title=Python工程师|recruiter=甲先生",
                 )
                 self.assertTrue(rows[0]["dedup_key"].startswith("content:"))
+            finally:
+                artifacts.close()
+
+    def test_conversations_without_selector_only_lists_ids_and_does_not_open(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            artifacts = self._artifacts(tmp)
+            entry = ConversationPreview(0, "甲先生", "甲公司", "工程师")
+            listing = _ConversationListing([entry])
+            chat = _ConversationChat()
+            ctx = OperationContext(
+                args=argparse.Namespace(
+                    conversation_id="", list_only=False, count=None, max_scrolls=8
+                ),
+                cfg=AppConfig(),
+                log=logging.getLogger("test-conversations-list-only"),
+                conversations=listing,
+                chat=chat,
+                artifacts=artifacts,
+            )
+            try:
+                self.assertEqual(op_conversations(ctx), 0)
+                self.assertEqual(listing.opened, [])
+                self.assertEqual(chat.read_calls, 0)
+                self.assertEqual(listing.back_calls, 0)
+            finally:
+                artifacts.close()
+
+    def test_conversations_match_id_and_keep_list_id_as_archive_primary_id(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            artifacts = self._artifacts(tmp)
+            entry = ConversationPreview(0, "甲先生", "甲公司", "工程师")
+            listing = _ConversationListing([entry])
+            chat = _ConversationChat()
+            ctx = OperationContext(
+                args=argparse.Namespace(
+                    conversation_id=entry.conversation_id,
+                    list_only=False,
+                    count=None,
+                    max_scrolls=0,
+                ),
+                cfg=AppConfig(),
+                log=logging.getLogger("test-conversations-target"),
+                conversations=listing,
+                chat=chat,
+                artifacts=artifacts,
+            )
+            try:
+                self.assertEqual(op_conversations(ctx), 0)
+                self.assertEqual(listing.opened, [entry])
+                self.assertEqual(chat.read_calls, 1)
+                paths = list(Path(artifacts.directory).glob("*_conversation_001.json"))
+                self.assertEqual(len(paths), 1)
+                payload = json.loads(paths[0].read_text(encoding="utf-8"))
+                self.assertEqual(payload["conversation_id"], entry.conversation_id)
+                self.assertEqual(payload["conversation_id_source"], "list")
+                self.assertEqual(payload["chat_conversation_id"], chat.conversation_id())
+            finally:
+                artifacts.close()
+
+    def test_conversations_count_is_explicit_and_read_only(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            artifacts = self._artifacts(tmp)
+            entries = [
+                ConversationPreview(0, "甲先生", "甲公司", "工程师"),
+                ConversationPreview(1, "乙女士", "乙公司", "产品经理"),
+            ]
+            listing = _ConversationListing(entries)
+            chat = _ConversationChat()
+            ctx = OperationContext(
+                args=argparse.Namespace(
+                    conversation_id="", list_only=False, count=1, max_scrolls=0
+                ),
+                cfg=AppConfig(),
+                log=logging.getLogger("test-conversations-count"),
+                conversations=listing,
+                chat=chat,
+                artifacts=artifacts,
+            )
+            try:
+                self.assertEqual(op_conversations(ctx), 0)
+                self.assertEqual(len(listing.opened), 1)
+                self.assertEqual(chat.read_calls, 1)
             finally:
                 artifacts.close()
 

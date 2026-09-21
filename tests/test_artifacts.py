@@ -70,6 +70,28 @@ class RunArtifactsTest(unittest.TestCase):
             finally:
                 artifacts.close()
 
+    def test_conversation_archive_contains_preview_and_message_rows(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            artifacts = RunArtifacts.create(Path(tmp))
+            try:
+                path = artifacts.save_conversation(
+                    {
+                        "schema_version": 1,
+                        "conversation_id": "company=甲公司|job_title=工程师",
+                        "list_preview": {"name": "甲先生"},
+                        "messages": [Message("你好", "them", "text")],
+                    }
+                )
+                payload = json.loads(Path(path).read_text(encoding="utf-8"))
+                self.assertEqual(payload["list_preview"]["name"], "甲先生")
+                self.assertEqual(payload["messages"][0]["text"], "你好")
+                self.assertEqual(
+                    payload["messages"][0]["conversation_id"],
+                    "company=甲公司|job_title=工程师",
+                )
+            finally:
+                artifacts.close()
+
 
 if __name__ == "__main__":
     unittest.main()

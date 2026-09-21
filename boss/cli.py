@@ -85,6 +85,7 @@ def cmd_op(args: Any) -> int:
     pages = set(spec.pages)
     if pages:
         from .pages.chat import ChatPage
+        from .pages.conversations import ConversationListPage
         from .pages.home import HomePage
         from .pages.job_detail import JobDetailPage
 
@@ -94,6 +95,8 @@ def cmd_op(args: Any) -> int:
         ctx.detail = JobDetailPage(ctx.device, cfg.timing, log, artifacts)
     if "chat" in pages:
         ctx.chat = ChatPage(ctx.device, cfg.timing, log, artifacts)
+    if "conversations" in pages:
+        ctx.conversations = ConversationListPage(ctx.device, cfg.timing, log, artifacts)
     if spec.requires_state:
         ctx.state = State(
             cfg.safety.state_path,
@@ -215,8 +218,8 @@ def build_parser() -> argparse.ArgumentParser:
     op.add_argument(
         "--count",
         type=_non_negative_int,
-        default=1,
-        help="scroll 操作滚动次数，默认 1",
+        default=None,
+        help="scroll 滚动次数；conversations 显式归档前 N 个会话",
     )
     op.add_argument(
         "--direction",
@@ -227,12 +230,23 @@ def build_parser() -> argparse.ArgumentParser:
     op.add_argument(
         "--name",
         default="",
-        help="screenshot/messages 输出文件名（扩展名可选）",
+        help="screenshot/messages/conversations 输出文件名（扩展名可选）",
     )
     op.add_argument(
         "--conversation-id",
         default="",
-        help="messages 去重上下文覆盖值；默认使用公司+职位+招聘者",
+        help="messages 的去重上下文，或 conversations 要匹配的会话 ID；默认使用公司+职位+招聘者",
+    )
+    op.add_argument(
+        "--list-only",
+        action="store_true",
+        help="conversations 只列出当前可见会话 ID，不打开聊天",
+    )
+    op.add_argument(
+        "--max-scrolls",
+        type=_non_negative_int,
+        default=8,
+        help="conversations 按 ID/数量查找时最多滚动次数，默认 8",
     )
     op.add_argument(
         "--rounds",

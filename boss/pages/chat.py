@@ -1,18 +1,46 @@
 """会话 / 聊天页。每个方法都是一个可单独调用的原子操作。"""
 from __future__ import annotations
 
+import html
 import random
 import re
 import time
 from typing import List
 
 from ..domain import Message
-from ..message_identity import normalize_message_value
+from ..message_identity import (
+    conversation_id_component,
+    make_conversation_id,
+    normalize_message_value,
+)
 from .base import BasePage
 from .. import selectors as S
 
 _NODE_RE = re.compile(r'<node\b[^>]*?/>')
 _BOUNDS_RE = re.compile(r'bounds="\[(-?\d+),(-?\d+)\]\[(-?\d+),(-?\d+)\]"')
+_TIME_LABEL_RE = re.compile(
+    r"^(?:\d{1,4}[/-]\d{1,2}(?:[/-]\d{1,2})?(?:\s+\d{1,2}:\d{2})?|\d{1,2}:\d{2})$"
+)
+
+# 聊天页顶部快捷操作、卡片按钮和已读状态都有文本节点，但它们不是
+# 对话内容。按 resource-id 优先过滤，兼容同一文字出现在真实消息中的情况。
+_NON_MESSAGE_RESOURCE_IDS = {
+    "mtextview",
+    "tv_button",
+    "tv_dialog_btn_left",
+    "tv_dialog_btn_right",
+    "mmsgtvstatus",
+    "tv_title",
+    "tv_sub_title",
+}
+_NON_MESSAGE_TEXTS = {
+    "换电话",
+    "查看微信",
+    "发简历",
+    "不感兴趣",
+    "复制微信号",
+    "已读",
+}
 
 
 class ChatPage(BasePage):
@@ -35,14 +63,8 @@ class ChatPage(BasePage):
 
     @staticmethod
     def _conversation_component(label: str, value: str) -> str:
-        """生成可读且不易产生分隔符歧义的上下文片段。"""
-        value = normalize_message_value(value)
-        if not value:
-            return ""
-        # conversation_id 会被再次规范化并参与哈希；转义只用于让归档
-        # 中的组合值可逆阅读，不把公司/职位中的竖线误当字段分隔符。
-        value = value.replace("\\", "\\\\").replace("|", "\\|")
-        return f"{label}={value}"
+        """兼容旧调用方，实际编码委托给统一会话 ID 工具。"""
+        return conversation_id_component(label, value)
 
     def conversation_context(self) -> dict:
         """读取会话栏上下文：公司、职位和招聘者名称。
@@ -71,14 +93,12 @@ class ChatPage(BasePage):
         ``--conversation-id`` 显式覆盖。
         """
         context = self.conversation_context()
-        parts = [
-            self._conversation_component("company", context["company"]),
-            self._conversation_component("job_title", context["job_title"]),
-            self._conversation_component("recruiter", context["recruiter"]),
-        ]
-        if not context["company"] and not context["job_title"]:
-            parts.append(self._conversation_component("subtitle", context["subtitle"]))
-        return "|".join(part for part in parts if part)
+        return make_conversation_id(
+            company=context["company"],
+            job_title=context["job_title"],
+            recruiter=context["recruiter"],
+            subtitle=context["subtitle"],
+        )
 
     def _input(self):
         box = self.el(S.CHAT["input"])
@@ -236,7 +256,7 @@ class ChatPage(BasePage):
         for m in _NODE_RE.finditer(xml):
             node = m.group(0)
             a = self._node_attrs(node)
-            label = (a["text"] or a["content-desc"]).strip()
+            label = html.unescape((a["text"] or a["content-desc"]).strip())
             if not label:
                 continue
             b = _BOUNDS_RE.search(node)
@@ -246,6 +266,11 @@ class ChatPage(BasePage):
             cy = (y1 + y2) // 2
             # 消息区:输入框之上,排除顶部标题/按钮(粗略 y>180)
             if not (180 < cy < input_top - 10):
+                continue
+            rid_lc = a["resource-id"].lower().rsplit("/", 1)[-1]
+            if rid_lc in _NON_MESSAGE_RESOURCE_IDS:
+                continue
+            if label in _NON_MESSAGE_TEXTS or _TIME_LABEL_RE.fullmatch(label):
                 continue
             # 过滤整个容器/整行:宽度覆盖大半个屏幕的节点视为容器,不是气泡
             if (x2 - x1) > screen_w * 0.9:
@@ -258,7 +283,6 @@ class ChatPage(BasePage):
             else:
                 sender = "system"
             kind = "text"
-            rid_lc = a["resource-id"].lower()
             if "resume" in rid_lc or "附件简历" in label or "已发送简历" in label:
                 kind = "resume"
             message_id = (
