@@ -29,8 +29,8 @@ limits:
 safety:
   # 逐个职位手动确认(全自动模式设为 false;为 true 时点"立即沟通"前在终端确认)
   confirm_before_apply: false
-  # 本地记录:把每条动作写入 CSV(时间/动作/职位/薪资/公司/说明)
-  records_csv: ".state/records.csv"
+  # 本地记录:每条动作写入 SQLite(表 records:ts/action/title/salary/company/note)
+  records_db: ".state/records.db"
 
 filters:
   # 职位标题命中以下任一词则跳过

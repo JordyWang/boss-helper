@@ -25,7 +25,7 @@ class ApplyEngine:
         self.home = HomePage(d, cfg.timing, log)
         self.detail = JobDetailPage(d, cfg.timing, log)
         self.chat = ChatPage(d, cfg.timing, log)
-        path = cfg.safety.records_csv
+        path = cfg.safety.records_db
         self.recorder = Recorder(path) if path else None
         self._stop = False
 

@@ -1,28 +1,41 @@
-"""本地记录:把每条投递动作追加写入 CSV,便于事后审查。"""
+"""本地记录:把每条投递动作写入 SQLite,便于事后审查与查询。"""
 from __future__ import annotations
 
-import csv
 import os
+import sqlite3
 from datetime import datetime
+from typing import Dict, List, Tuple
 
-_HEADER = ["时间", "动作", "职位", "薪资", "公司", "说明"]
+_SCHEMA = """
+CREATE TABLE IF NOT EXISTS records (
+  id      INTEGER PRIMARY KEY AUTOINCREMENT,
+  ts      TEXT    NOT NULL,
+  action  TEXT    NOT NULL,
+  title   TEXT,
+  salary  TEXT,
+  company TEXT,
+  note    TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_records_ts     ON records(ts);
+CREATE INDEX IF NOT EXISTS idx_records_action ON records(action);
+"""
 
 
 class Recorder:
-    """动作类型:applied(已沟通)/filtered(被规则过滤)/duplicate(重复跳过)/error(出错)。"""
+    """动作类型:applied / filtered / skipped / error。"""
 
-    def __init__(self, path: str = ".state/records.csv"):
+    def __init__(self, path: str = ".state/records.db"):
         self.path = path
         directory = os.path.dirname(path)
         if directory:
             os.makedirs(directory, exist_ok=True)
-        is_new = not os.path.exists(path)
-        # utf-8-sig 让 Excel 正确识别中文
-        self._fh = open(path, "a", newline="", encoding="utf-8-sig")
-        self._writer = csv.writer(self._fh)
-        if is_new:
-            self._writer.writerow(_HEADER)
-            self._fh.flush()
+        self._conn = sqlite3.connect(path)
+        self._conn.executescript(_SCHEMA)
+        self._conn.commit()
+
+    @staticmethod
+    def _now() -> str:
+        return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     def add(
         self,
@@ -32,13 +45,30 @@ class Recorder:
         company: str = "",
         note: str = "",
     ) -> None:
-        self._writer.writerow(
-            [datetime.now().strftime("%Y-%m-%d %H:%M:%S"), action, title, salary, company, note]
+        self._conn.execute(
+            "INSERT INTO records(ts,action,title,salary,company,note) VALUES(?,?,?,?,?,?)",
+            (self._now(), action, title, salary, company, note),
         )
-        self._fh.flush()
+        self._conn.commit()
+
+    def recent(self, n: int = 20) -> List[Tuple[str, str, str, str, str, str]]:
+        """返回最近 n 条,时间正序。"""
+        cur = self._conn.execute(
+            "SELECT ts,action,title,salary,company,note FROM records ORDER BY id DESC LIMIT ?",
+            (n,),
+        )
+        return list(reversed(cur.fetchall()))
+
+    def counts(self) -> Dict[str, int]:
+        cur = self._conn.execute("SELECT action, COUNT(*) FROM records GROUP BY action")
+        return {row[0]: row[1] for row in cur.fetchall()}
+
+    def total(self) -> int:
+        cur = self._conn.execute("SELECT COUNT(*) FROM records")
+        return int(cur.fetchone()[0])
 
     def close(self) -> None:
         try:
-            self._fh.close()
+            self._conn.close()
         except Exception:
             pass

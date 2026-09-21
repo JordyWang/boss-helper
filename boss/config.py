@@ -23,7 +23,7 @@ class Limits:
 @dataclass
 class Safety:
     confirm_before_apply: bool = False
-    records_csv: str = ".state/records.csv"
+    records_db: str = ".state/records.db"
 
 
 @dataclass
@@ -86,7 +86,7 @@ def load_config(path: str = "config.yaml") -> AppConfig:
         ),
         safety=Safety(
             confirm_before_apply=bool(saf.get("confirm_before_apply", False)),
-            records_csv=str(saf.get("records_csv", ".state/records.csv")),
+            records_db=str(saf.get("records_db", ".state/records.db")),
         ),
         filters=Filters(
             include_keywords=list(fil.get("include_keywords", []) or []),
