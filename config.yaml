@@ -15,14 +15,14 @@ greeting:
   messages:
     - "您好,我对该岗位很感兴趣,期待与您进一步沟通!"
     - "您好,我的经历与该岗位匹配,方便聊聊吗?"
-  # 是否在会话中手动输入并发送招呼语
-  send_manual: false
+  # 是否在会话中手动输入并发送招呼语(全自动模式:建议 true)
+  send_manual: true
   # 是否尝试点击"发送简历"(部分岗位会弹出)
   send_resume: false
 
 limits:
   # 单次运行最多建立的会话数
-  max_apply_per_run: 3
+  max_apply_per_run: 20
   # 每日累计上限(风控保护,跨运行累计)
   max_apply_per_day: 100
 
