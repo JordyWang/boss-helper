@@ -33,6 +33,12 @@ class Recorder:
         self._conn.executescript(_SCHEMA)
         self._conn.commit()
 
+    def __enter__(self) -> "Recorder":
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback) -> None:
+        self.close()
+
     @staticmethod
     def _now() -> str:
         return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -45,6 +51,8 @@ class Recorder:
         company: str = "",
         note: str = "",
     ) -> None:
+        if not action or not str(action).strip():
+            raise ValueError("记录动作不能为空")
         self._conn.execute(
             "INSERT INTO records(ts,action,title,salary,company,note) VALUES(?,?,?,?,?,?)",
             (self._now(), action, title, salary, company, note),
@@ -53,6 +61,12 @@ class Recorder:
 
     def recent(self, n: int = 20) -> List[Tuple[str, str, str, str, str, str]]:
         """返回最近 n 条,时间正序。"""
+        try:
+            n = int(n)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("n 必须是整数") from exc
+        if n <= 0:
+            return []
         cur = self._conn.execute(
             "SELECT ts,action,title,salary,company,note FROM records ORDER BY id DESC LIMIT ?",
             (n,),

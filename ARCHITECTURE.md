@@ -1,0 +1,67 @@
+# 架构说明
+
+项目按依赖方向分成四层：
+
+```text
+CLI / tools
+    ↓
+runtime（启动组装）
+    ↓
+application（ApplyService 业务编排）
+    ↓
+domain + ports（Job、Message、过滤策略和协议）
+
+设备页面、State、Recorder 是 ports 的基础设施实现。
+```
+
+原子调试操作由 `operations` 注册表驱动：
+
+```text
+cli → OperationContext → OperationSpec(handler)
+                       ├─ 设备/是否启动 App
+                       ├─ 需要的页面对象
+                       └─ 是否需要显式 --yes
+```
+
+- `boss/domain.py` 只保存职位、消息和运行结果，不依赖真机。
+- `boss/application.py` 实现批量投递流程，依赖 `ports.py` 定义的页面/存储
+  协议，因此可以用 fake 页面做测试。
+- `boss/operations.py` 集中登记 `recommend`、`detail`、`send`、`dry-run`、
+  `filter-check` 等原子操作及其依赖；CLI 不再维护一串 `if/elif`。
+- `boss/engine.py` 是真实设备适配器，保留原来的 `ApplyEngine` 入口并组装
+  `HomePage`、`JobDetailPage` 和 `ChatPage`。
+- `boss/runtime.py` 负责连接设备、切到前台和创建状态仓库。
+- `boss/cli.py` 只处理参数、输出和退出码，`main.py` 只是兼容启动脚本。
+
+`filter-check` 只加载配置并在本地评估职位；`health` 连接设备但不会强制
+启动 App；`dry-run` 使用只读状态仓库，只扫描和过滤，不点击卡片、不发送消息、
+也不会落盘修改状态。
+
+## 每次运行的文件归档
+
+`RunArtifacts` 为每次命令创建 `logs/YYYYMMDD_HHMMSS/`（同秒重复时自动加
+后缀）并生成 `run.log`。截图和 UI dump 共用递增序号，例如：
+
+```text
+logs/20260921_231500/
+├── run.log
+├── 001_dump.xml
+└── 002_screenshot.png
+```
+
+`logs/.run.lock` 是运行锁。锁存在时新的命令会立即退出，从而保证设备操作
+严格串行；正常结束或异常清理后锁会删除。
+
+状态 JSON 使用临时文件写入后 `os.replace` 原子替换；运行锁使用
+`O_CREAT|O_EXCL` 原子创建，避免两个进程同时取得设备控制权。
+
+## 无真机测试
+
+核心编排使用端口协议，可以直接运行：
+
+```bash
+python3 -m unittest discover -v
+```
+
+这组测试不连接设备，覆盖配置解析、状态去重、运行锁/工件命名、页面等待
+语义、批处理编排和原子操作安全边界。

@@ -3,35 +3,47 @@ from __future__ import annotations
 
 import os
 import sys
-import time
+from typing import Optional
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import uiautomator2 as u2
+from boss.config import ConfigError, load_config
+from boss.artifacts import RunArtifacts
 
-from boss.config import load_config
 
-
-def dump(config_path: str = "config.yaml") -> str:
+def dump(
+    config_path: str = "config.yaml", artifacts: Optional[RunArtifacts] = None
+) -> str:
     cfg = load_config(config_path)
-    d = u2.connect(cfg.serial or None)
+    owned_artifacts = artifacts is None
+    if artifacts is None:
+        artifacts = RunArtifacts.create()
+    try:
+        import uiautomator2 as u2
+    except ImportError as exc:
+        if owned_artifacts:
+            artifacts.close()
+        raise RuntimeError(
+            "缺少 uiautomator2 依赖，请先执行: pip install -r requirements.txt"
+        ) from exc
+    try:
+        d = u2.connect(cfg.serial or None)
+        xml_path = artifacts.save_dump(d, "dump.xml")
+        png_path = artifacts.save_screenshot(d, "screenshot.png")
 
-    os.makedirs("logs/dump", exist_ok=True)
-    stamp = time.strftime("%Y%m%d_%H%M%S")
-    xml_path = os.path.join("logs/dump", f"hierarchy_{stamp}.xml")
-    png_path = os.path.join("logs/dump", f"screen_{stamp}.png")
-
-    xml = d.dump_hierarchy()
-    with open(xml_path, "w", encoding="utf-8") as fh:
-        fh.write(xml)
-    d.screenshot(png_path)
-
-    print(f"已保存层级: {xml_path}")
-    print(f"已保存截图: {png_path}")
-    print("\n在 XML 中搜索目标控件的 resource-id / text / content-desc,")
-    print("回填到 boss/selectors.py 对应位置即可。")
-    return xml_path
+        print(f"已保存层级: {xml_path}")
+        print(f"已保存截图: {png_path}")
+        print("\n在 XML 中搜索目标控件的 resource-id / text / content-desc,")
+        print("回填到 boss/selectors.py 对应位置即可。")
+        return xml_path
+    finally:
+        if owned_artifacts:
+            artifacts.close()
 
 
 if __name__ == "__main__":
-    dump()
+    try:
+        dump()
+    except (ConfigError, RuntimeError) as exc:
+        print(f"错误: {exc}", file=sys.stderr)
+        sys.exit(2)

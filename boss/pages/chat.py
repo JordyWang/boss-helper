@@ -4,17 +4,11 @@ from __future__ import annotations
 import random
 import re
 import time
-from typing import List, NamedTuple, Optional
+from typing import List
 
+from ..domain import Message
 from .base import BasePage
 from .. import selectors as S
-
-
-class Message(NamedTuple):
-    text: str
-    sender: str  # 'me' | 'them' | 'system'
-    kind: str    # 'text' | 'resume'
-
 
 _NODE_RE = re.compile(r'<node\b[^>]*?/>')
 _BOUNDS_RE = re.compile(r'bounds="\[(-?\d+),(-?\d+)\]\[(-?\d+),(-?\d+)\]"')
@@ -218,16 +212,26 @@ class ChatPage(BasePage):
         - send_resume=true 且未曾发过 → 点'同意'
         - 其他情况 → 点'拒绝'(避免重复发)
         弹窗存在则处理后返回 True,不存在返回 False。"""
+        action = "agree" if send_resume and not already_sent else "reject"
+        return self.handle_resume_action(action, reason="已发过简历" if already_sent else "策略")
+
+    def resume_dialog_visible(self) -> bool:
+        """是否存在索要附件简历弹窗。"""
+        return self.exists(S.DETAIL["resume_agree_btn"], timeout=1.5)
+
+    def handle_resume_action(self, action: str, reason: str = "") -> bool:
+        """显式处理简历弹窗：``agree`` 或 ``reject``。"""
+        if action not in ("agree", "reject"):
+            raise ValueError("action 必须是 agree 或 reject")
         agree = S.DETAIL["resume_agree_btn"]
         reject = S.DETAIL["resume_reject_btn"]
         if not self.exists(agree, timeout=1.5):
             return False
-        action = send_resume and not already_sent
-        btn = agree if action else reject
-        label = "同意" if action else ("拒绝(已发过)" if already_sent else "拒绝")
-        self.log.info("检测到索要简历弹窗 → 点 %s", label)
-        self.click(btn, timeout=3.0)
-        return True
+        selector = agree if action == "agree" else reject
+        label = "同意" if action == "agree" else "拒绝"
+        suffix = f"（{reason}）" if reason else ""
+        self.log.info("检测到索要简历弹窗 → 点 %s%s", label, suffix)
+        return self.click(selector, timeout=3.0)
 
     def send_greeting(self, messages: List[str]) -> bool:
         """随机选一条招呼语并发送。"""

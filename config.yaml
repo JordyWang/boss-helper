@@ -31,6 +31,8 @@ safety:
   confirm_before_apply: false
   # 本地记录:每条动作写入 SQLite(表 records:ts/action/title/salary/company/note)
   records_db: ".state/records.db"
+  # 运行状态:每日计数与职位去重 key
+  state_path: ".state/state.json"
 
 filters:
   # 职位标题命中以下任一词则跳过

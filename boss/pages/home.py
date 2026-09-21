@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from typing import List
 
+from ..domain import Job
 from .base import BasePage
 from .. import selectors as S
 
@@ -35,6 +36,10 @@ class JobCard:
     @property
     def company(self) -> str:
         return self._child_text(S.HOME["job_card_company"])
+
+    def to_job(self) -> Job:
+        """一次性读取卡片字段，交给应用层的领域对象处理。"""
+        return Job.from_values(self.title, self.salary, self.company)
 
     def click(self) -> None:
         self.el.click()
@@ -78,8 +83,14 @@ class HomePage(BasePage):
         count = container.count
         return [JobCard(container[i], i) for i in range(count)]
 
-    def scroll(self) -> None:
-        self.swipe_up()
+    def scroll(self, direction: str = "up") -> None:
+        """滚动推荐列表；默认向上加载下一屏。"""
+        if direction == "down":
+            self.swipe_down()
+        elif direction == "up":
+            self.swipe_up()
+        else:
+            raise ValueError("direction 必须是 up 或 down")
 
     def back_to_list(self, max_backs: int = 5) -> bool:
         """连续返回,直到确认回到 MainActivity 且推荐列表卡片可见。
