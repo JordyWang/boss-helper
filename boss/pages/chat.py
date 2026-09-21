@@ -4,10 +4,20 @@ from __future__ import annotations
 import random
 import re
 import time
-from typing import List, Optional
+from typing import List, NamedTuple, Optional
 
 from .base import BasePage
 from .. import selectors as S
+
+
+class Message(NamedTuple):
+    text: str
+    sender: str  # 'me' | 'them' | 'system'
+    kind: str    # 'text' | 'resume'
+
+
+_NODE_RE = re.compile(r'<node\b[^>]*?/>')
+_BOUNDS_RE = re.compile(r'bounds="\[(-?\d+),(-?\d+)\]\[(-?\d+),(-?\d+)\]"')
 
 
 class ChatPage(BasePage):
@@ -116,15 +126,105 @@ class ChatPage(BasePage):
         self.log.info("已发送消息: %s", text)
         return True
 
-    def handle_resume_dialog(self, send_resume: bool) -> bool:
-        """招聘者索要附件简历弹窗:send_resume=true 点"同意",否则点"拒绝"。
+    @staticmethod
+    def _node_attrs(node_xml: str) -> dict:
+        out = {}
+        for key in ("text", "content-desc", "resource-id", "class", "bounds"):
+            m = re.search(rf'{key}="([^"]*)"', node_xml)
+            out[key] = m.group(1) if m else ""
+        return out
+
+    def read_messages(self, settle_seconds: float = 1.2) -> List[Message]:
+        """解析会话气泡列表。以输入框顶部为界,消息区内的可见文本节点即气泡;
+        依据水平位置判定发送方(右 55%+ = 我方,左 45%- = 对方,中间 = 系统)。
+        Boss 无稳定的消息 resource-id,故此启发式跨版本更耐用。"""
+        try:
+            inp = self.el(S.CHAT["input"])
+            if not inp.wait(timeout=3.0):
+                return []
+            input_top = inp.info["bounds"]["top"]
+        except Exception:
+            return []
+        try:
+            screen_w, _ = self.d.window_size()
+        except Exception:
+            return []
+        try:
+            xml = self.d.dump_hierarchy()
+        except Exception as exc:
+            self.log.debug("dump_hierarchy 失败: %r", exc)
+            return []
+        if settle_seconds:
+            time.sleep(settle_seconds)
+            try:
+                xml = self.d.dump_hierarchy()
+            except Exception:
+                pass
+
+        msgs: List[Message] = []
+        for m in _NODE_RE.finditer(xml):
+            node = m.group(0)
+            a = self._node_attrs(node)
+            label = (a["text"] or a["content-desc"]).strip()
+            if not label:
+                continue
+            b = _BOUNDS_RE.search(node)
+            if not b:
+                continue
+            x1, y1, x2, y2 = map(int, b.groups())
+            cy = (y1 + y2) // 2
+            # 消息区:输入框之上,排除顶部标题/按钮(粗略 y>180)
+            if not (180 < cy < input_top - 10):
+                continue
+            # 过滤整个容器/整行:宽度覆盖大半个屏幕的节点视为容器,不是气泡
+            if (x2 - x1) > screen_w * 0.9:
+                continue
+            cx = (x1 + x2) // 2
+            if cx > screen_w * 0.55:
+                sender = "me"
+            elif cx < screen_w * 0.45:
+                sender = "them"
+            else:
+                sender = "system"
+            kind = "text"
+            rid_lc = a["resource-id"].lower()
+            if "resume" in rid_lc or "附件简历" in label or "已发送简历" in label:
+                kind = "resume"
+            msgs.append(Message(text=label, sender=sender, kind=kind))
+        return msgs
+
+    def summarize(self, msgs: List[Message]) -> str:
+        mine = sum(1 for m in msgs if m.sender == "me")
+        theirs = sum(1 for m in msgs if m.sender == "them")
+        return f"我方 {mine} / 对方 {theirs} / 领先 {mine - theirs}"
+
+    def lead(self, msgs: List[Message]) -> int:
+        mine = sum(1 for m in msgs if m.sender == "me")
+        theirs = sum(1 for m in msgs if m.sender == "them")
+        return mine - theirs
+
+    def has_sent_resume(self, msgs: List[Message]) -> bool:
+        return any(m.sender == "me" and m.kind == "resume" for m in msgs)
+
+    def should_send_greeting(self, msgs: List[Message], max_lead: int = 1) -> bool:
+        """兜底:我方领先不超过 max_lead 条;若已领先或已发过任何我方文本消息则跳过。"""
+        mine_text = [m for m in msgs if m.sender == "me" and m.kind == "text"]
+        if mine_text:
+            return False
+        return self.lead(msgs) < max_lead
+
+    def handle_resume_dialog(self, send_resume: bool, already_sent: bool = False) -> bool:
+        """招聘者索要附件简历弹窗:
+        - send_resume=true 且未曾发过 → 点'同意'
+        - 其他情况 → 点'拒绝'(避免重复发)
         弹窗存在则处理后返回 True,不存在返回 False。"""
         agree = S.DETAIL["resume_agree_btn"]
         reject = S.DETAIL["resume_reject_btn"]
         if not self.exists(agree, timeout=1.5):
             return False
-        btn = agree if send_resume else reject
-        label = "同意" if send_resume else "拒绝"
+        action = send_resume and not already_sent
+        btn = agree if action else reject
+        label = "同意" if action else ("拒绝(已发过)" if already_sent else "拒绝")
         self.log.info("检测到索要简历弹窗 → 点 %s", label)
         self.click(btn, timeout=3.0)
         return True

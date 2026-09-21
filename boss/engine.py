@@ -12,7 +12,7 @@ from .pages.home import HomePage
 from .pages.job_detail import JobDetailPage
 from .pages.chat import ChatPage
 from .records import Recorder
-from .state import State
+from .state import State, make_key
 
 
 class ApplyEngine:
@@ -58,9 +58,6 @@ class ApplyEngine:
             return False
         return True
 
-    def _key(self, title: str, salary: str, company: str = "") -> str:
-        return f"{title}|{salary}|{company}".strip()
-
     def _record(
         self,
         action: str,
@@ -81,16 +78,17 @@ class ApplyEngine:
         if not title:
             return applied_this_run, False
 
-        key = self._key(title, salary, company)
-        if self.state.is_seen(key):
-            self.log.debug("已处理过,跳过: %s", title)
+        # 卡片 key 与详情页 key 都算同一个职位;任一命中即跳过
+        card_key = make_key(title, salary, company)
+        if self.state.is_seen(card_key):
+            self.log.debug("已处理过(卡片键),跳过: %s", title)
             return applied_this_run, False
 
         # 卡片级预过滤,命中排除规则的职位不点进详情,减少跳转与风控暴露
         decision = self.filter.check(title, salary)
         if not decision.accept:
             self.log.info("跳过[%s] %s (%s)", decision.reason, title, salary)
-            self.state.mark_skipped(key)
+            self.state.mark_skipped(card_key)
             self._record("filtered", title, salary, company, decision.reason)
             return applied_this_run, False
 
@@ -102,7 +100,7 @@ class ApplyEngine:
                 return applied_this_run, False
             if choice != "y":
                 self.log.info("用户跳过: %s", title)
-                self.state.mark_skipped(key)
+                self.state.mark_skipped(card_key)
                 self._record("skipped", title, salary, company, "用户手动跳过")
                 return applied_this_run, False
 
@@ -111,22 +109,43 @@ class ApplyEngine:
 
         detail_salary = self.detail.salary() or salary
         detail_title = self.detail.title() or title
+        detail_key = make_key(detail_title, detail_salary, company)
+
+        # 卡片读到的字段可能与详情页不一致;这里再校验一次
+        if self.state.is_seen(detail_key):
+            self.log.info("已处理过(详情页键),返回: %s", detail_title)
+            self.state.mark_skipped(card_key)  # 记住这张卡,避免再次点进来
+            self.home.back_to_list()
+            return applied_this_run, True
 
         if not self.detail.communicate():
             self.log.warning("未找到'立即沟通'按钮,跳过: %s", detail_title)
             self._record("error", detail_title, detail_salary, company, "未找到'立即沟通'按钮")
+            # 同一坑位反复读到错误字段时会一直命中这条错误,把两个键都标记为已见
+            self.state.mark_skipped([card_key, detail_key])
             self.home.back_to_list()
             return applied_this_run, True
 
         self.detail.handle_after_communicate()
 
-        if self.cfg.greeting.send_manual and self.chat.in_chat():
-            self.chat.send_greeting(self.cfg.greeting.messages)
+        # 进入会话后先扫描历史,避免重复打招呼/重复发简历
+        if self.chat.in_chat():
+            msgs = self.chat.read_messages()
+            self.log.info("会话现状: %s", self.chat.summarize(msgs))
+            if self.cfg.greeting.send_manual:
+                if self.chat.should_send_greeting(msgs):
+                    self.chat.send_greeting(self.cfg.greeting.messages)
+                    # 发送后重新扫一次,供简历判定使用最新状态
+                    msgs = self.chat.read_messages(settle_seconds=0.6)
+                else:
+                    self.log.info("已打过招呼或领先≥1条,跳过重复招呼语")
+            already_sent_resume = self.chat.has_sent_resume(msgs)
+            self.chat.handle_resume_dialog(
+                self.cfg.greeting.send_resume, already_sent=already_sent_resume
+            )
 
-        # 处理"招聘者索要附件简历"弹窗(send_resume 决定同意/拒绝)
-        self.chat.handle_resume_dialog(self.cfg.greeting.send_resume)
-
-        self.state.mark_applied(self._key(detail_title, detail_salary, company))
+        # 同一职位在卡片与详情页文本可能微差,两个键都登记,避免下次重复点击
+        self.state.mark_applied([card_key, detail_key])
         applied_this_run += 1
         self.log.info(
             "已建立沟通 (%d/%d, 今日 %d): %s %s",

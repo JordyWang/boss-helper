@@ -97,6 +97,15 @@ def cmd_op(args) -> int:
             return 1
         log.info("在会话页发送 -> %s", chat.send_message(text))
 
+    elif op == "messages":
+        if not chat.in_chat():
+            log.error("当前不在会话页")
+            return 1
+        msgs = chat.read_messages()
+        log.info("读到 %d 条气泡 (%s)", len(msgs), chat.summarize(msgs))
+        for i, m in enumerate(msgs):
+            log.info("  [%d] %s | %s | %s", i, m.sender, m.kind, m.text[:60])
+
     elif op == "back":
         home.back()
         log.info("已返回")
@@ -197,7 +206,7 @@ def main(argv=None) -> int:
     op = sub.add_parser("op", help="单独执行一个原子操作(调试用)")
     op.add_argument(
         "op",
-        choices=["recommend", "detail", "read", "communicate", "send", "back", "home"],
+        choices=["recommend", "detail", "read", "communicate", "send", "messages", "back", "home"],
         help="要执行的操作",
     )
     op.add_argument("--index", type=int, default=0, help="detail 操作点第几个卡片")
