@@ -224,7 +224,16 @@ def build_parser() -> argparse.ArgumentParser:
         default="up",
         help="scroll 操作方向，默认 up",
     )
-    op.add_argument("--name", default="", help="screenshot 输出文件名（扩展名可选）")
+    op.add_argument(
+        "--name",
+        default="",
+        help="screenshot/messages 输出文件名（扩展名可选）",
+    )
+    op.add_argument(
+        "--conversation-id",
+        default="",
+        help="messages 去重上下文；没有服务端 ID 时建议传入会话标识",
+    )
     op.add_argument(
         "--rounds",
         type=_non_negative_int,

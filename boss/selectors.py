@@ -57,6 +57,8 @@ DETAIL = {
 # ---------- 会话 / 聊天 ----------
 # 已用真机 dump 校准(ChatRoomActivity,2026-09-21)。
 CHAT = {
+    # 会话标题仅作为本地去重指纹的上下文，不是服务端 conversationId。
+    "conversation_title": {"resourceId": "com.hpbr.bosszhipin:id/tv_title"},
     # 聊天输入框(hint=回复消息)
     "input": {"resourceId": "com.hpbr.bosszhipin:id/editText_with_scrollbar"},
     # 发送按钮无 resource-id:输入文字后出现在输入行最右侧的可点击 ImageView,

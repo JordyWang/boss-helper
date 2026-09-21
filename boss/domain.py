@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from typing import NamedTuple
 
 from .identity import make_key
+from .message_identity import message_fingerprint
 
 
 @dataclass(frozen=True)
@@ -34,6 +35,19 @@ class Message(NamedTuple):
     text: str
     sender: str  # 'me' | 'them' | 'system'
     kind: str  # 'text' | 'resume'
+    # 当前 UI 解析器没有这些字段；保留可选槽位，接入服务端/API 数据后
+    # 可以无损升级到真正的消息 ID/时间戳，而不改变上层端口。
+    timestamp: str = ""
+    message_id: str = ""
+
+    @property
+    def fingerprint(self) -> str:
+        """当前会话未知时的本地 best-effort 去重指纹。"""
+        return message_fingerprint(self)
+
+    def conversation_fingerprint(self, conversation_id: str = "") -> str:
+        """带会话上下文的去重指纹；有服务端 ID 时优先使用它。"""
+        return message_fingerprint(self, conversation_id)
 
 
 @dataclass(frozen=True)

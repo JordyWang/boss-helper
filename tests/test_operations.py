@@ -1,4 +1,5 @@
 import argparse
+import json
 import logging
 import tempfile
 import unittest
@@ -9,7 +10,13 @@ from boss.artifacts import RunArtifacts
 from boss.cli import build_parser, cmd_op
 from boss.config import AppConfig
 from boss.domain import Job
-from boss.operations import OPERATION_SPECS, OperationContext, op_dry_run, op_resume
+from boss.operations import (
+    OPERATION_SPECS,
+    OperationContext,
+    op_dry_run,
+    op_messages,
+    op_resume,
+)
 from boss.logger import close_logger
 
 
@@ -91,6 +98,19 @@ class _ResumeChat:
     def handle_resume_action(self, action, reason=""):
         self.actions.append((action, reason))
         return True
+
+
+class _MessagesChat:
+    def in_chat(self):
+        return True
+
+    def read_messages(self):
+        return [
+            type("Message", (), {"text": "你好", "sender": "them", "kind": "text"})(),
+        ]
+
+    def summarize(self, messages):
+        return "我方 0 / 对方 1 / 领先 -1"
 
 
 class OperationRegistryTest(unittest.TestCase):
@@ -234,6 +254,28 @@ class OperationExecutionTest(unittest.TestCase):
         self.assertEqual(home.clicks, 0)
         self.assertEqual(state.mutations, 0)
         self.assertTrue(state.reads)
+
+    def test_messages_are_saved_as_structured_json(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            artifacts = self._artifacts(tmp)
+            ctx = OperationContext(
+                args=argparse.Namespace(name=""),
+                cfg=AppConfig(),
+                log=logging.getLogger("test-messages"),
+                chat=_MessagesChat(),
+                artifacts=artifacts,
+            )
+            try:
+                self.assertEqual(op_messages(ctx), 0)
+                paths = list(Path(artifacts.directory).glob("*_messages.json"))
+                self.assertEqual(len(paths), 1)
+                with open(paths[0], "r", encoding="utf-8") as fh:
+                    rows = json.load(fh)
+                self.assertEqual(rows[0]["text"], "你好")
+                self.assertEqual(rows[0]["sender"], "them")
+                self.assertTrue(rows[0]["dedup_key"].startswith("content:"))
+            finally:
+                artifacts.close()
 
     def test_resume_requires_explicit_confirmation_for_actions(self):
         chat = _ResumeChat()

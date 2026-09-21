@@ -160,6 +160,24 @@ def op_messages(ctx: OperationContext) -> int:
         return 1
     messages = chat.read_messages()
     ctx.log.info("读到 %d 条气泡 (%s)", len(messages), chat.summarize(messages))
+    artifacts = ctx.artifacts or getattr(ctx.log, "run_artifacts", None)
+    if artifacts is not None:
+        conversation_id = getattr(ctx.args, "conversation_id", "") or ""
+        if not conversation_id:
+            # 标题只是上下文，不是 Boss 的官方会话 ID；如果调用方能拿到
+            # 服务端 ID，应通过 --conversation-id 或 API 数据显式传入。
+            getter = getattr(chat, "conversation_id", None)
+            if callable(getter):
+                try:
+                    conversation_id = str(getter() or "")
+                except Exception:
+                    conversation_id = ""
+        path = artifacts.save_messages(
+            messages,
+            getattr(ctx.args, "name", "") or None,
+            conversation_id=conversation_id,
+        )
+        ctx.log.info("聊天消息已保存: %s", path)
     for index, message in enumerate(messages):
         ctx.log.info("  [%d] %s | %s | %s", index, message.sender, message.kind, message.text[:60])
     return 0

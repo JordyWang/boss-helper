@@ -19,6 +19,19 @@ class ChatPage(BasePage):
         """是否处于会话页(以输入框存在为准)。"""
         return self.exists(S.CHAT["chat_flag"], timeout=4.0)
 
+    def conversation_id(self) -> str:
+        """返回可作为本地去重上下文的会话标题。
+
+        当前 APK 的 UI 没有暴露服务端 conversationId，因此这里故意不把
+        标题称为官方 ID；同名招聘者仍可能发生碰撞，调用方可用 CLI 的
+        ``--conversation-id`` 覆盖。
+        """
+        try:
+            value = self.text_of(S.CHAT["conversation_title"], timeout=1.0)
+        except Exception:
+            return ""
+        return str(value or "").strip()
+
     def _input(self):
         box = self.el(S.CHAT["input"])
         if not box.wait(timeout=5.0):
@@ -123,8 +136,24 @@ class ChatPage(BasePage):
     @staticmethod
     def _node_attrs(node_xml: str) -> dict:
         out = {}
-        for key in ("text", "content-desc", "resource-id", "class", "bounds"):
-            m = re.search(rf'{key}="([^"]*)"', node_xml)
+        for key in (
+            "text",
+            "content-desc",
+            "resource-id",
+            "class",
+            "bounds",
+            # 目前 APK 的 hierarchy 没有这些属性；保留读取能力，若后续
+            # 版本把业务 ID 放到可访问性节点，就能直接升级为服务端去重。
+            "message-id",
+            "message_id",
+            "data-id",
+            "id",
+            "timestamp",
+            "time",
+        ):
+            # 要求属性名前有边界；否则读取 ``id`` 会误匹配
+            # ``resource-id``，把控件类型错误地当成消息 ID。
+            m = re.search(rf'(?:^|\s){re.escape(key)}="([^"]*)"', node_xml)
             out[key] = m.group(1) if m else ""
         return out
 
@@ -184,7 +213,19 @@ class ChatPage(BasePage):
             rid_lc = a["resource-id"].lower()
             if "resume" in rid_lc or "附件简历" in label or "已发送简历" in label:
                 kind = "resume"
-            msgs.append(Message(text=label, sender=sender, kind=kind))
+            message_id = (
+                a["message-id"] or a["message_id"] or a["data-id"] or a["id"]
+            )
+            timestamp = a["timestamp"] or a["time"]
+            msgs.append(
+                Message(
+                    text=label,
+                    sender=sender,
+                    kind=kind,
+                    timestamp=timestamp,
+                    message_id=message_id,
+                )
+            )
         return msgs
 
     def summarize(self, msgs: List[Message]) -> str:

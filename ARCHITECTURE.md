@@ -55,6 +55,23 @@ logs/20260921_231500/
 状态 JSON 使用临时文件写入后 `os.replace` 原子替换；运行锁使用
 `O_CREAT|O_EXCL` 原子创建，避免两个进程同时取得设备控制权。
 
+## 聊天消息归档与去重
+
+`op messages` 会把结构化消息写入本次运行目录的 `*_messages.json`。当前
+APK（14.160）提供给 UI hierarchy 的只有控件 `resource-id`、`index`、文本
+和坐标，没有可直接使用的 `messageId`/`conversationId`；因此这些字段不会被
+误当成唯一 ID。
+
+每条归档消息包含 `dedup_key` 和 `dedup_source`：
+
+- 接入 API/带有 `message_id` 时，使用“会话 + 服务端 ID”（`server_id`）；
+- 当前 UI 方案使用“会话上下文 + sender + kind + 规范化文本 + 可选时间戳”
+  的 SHA-256 内容指纹（`content`）。
+
+内容指纹是本地 best-effort 标识，不是 Boss 官方 ID。两个完全相同且没有
+时间戳的消息无法仅靠 UI 可靠区分；需要严格去重时，应从接口或 App 的业务
+数据层取得服务端消息 ID，并通过 `--conversation-id` 提供会话上下文。
+
 ## 当前真机与 APK 基线
 
 最近一次从已连接设备读取（2026-09-22）：

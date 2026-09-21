@@ -6,12 +6,21 @@
 """
 from __future__ import annotations
 
+import json
 import os
+import tempfile
 import threading
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import IO, Optional, Union
+from typing import Any, IO, Iterable, Optional, Union
+
+from .message_identity import (
+    message_id_value,
+    message_identity,
+    message_timestamp_value,
+    message_value,
+)
 
 
 PathLike = Union[str, os.PathLike]
@@ -163,6 +172,13 @@ class RunArtifacts:
         kind = Path(name).stem if name else "dump"
         return self.next_path(kind, extension)
 
+    def messages_path(self, name: Optional[str] = None) -> str:
+        """分配聊天消息归档路径，与截图/dump 共用运行序号。"""
+        extension = Path(name).suffix.lstrip(".") if name else ""
+        extension = extension or "json"
+        kind = Path(name).stem if name else "messages"
+        return self.next_path(kind, extension)
+
     def save_screenshot(self, device: object, name: Optional[str] = None) -> str:
         path = self.screenshot_path(name)
         device.screenshot(path)
@@ -173,6 +189,59 @@ class RunArtifacts:
         xml = device.dump_hierarchy()
         with open(path, "w", encoding="utf-8") as fh:
             fh.write(xml)
+        return path
+
+    def save_messages(
+        self,
+        messages: Iterable[Any],
+        name: Optional[str] = None,
+        conversation_id: str = "",
+    ) -> str:
+        """把结构化聊天消息保存为 JSON，并写入可解释的去重键。
+
+        ``dedup_key`` 在有服务端 ID 时是 ``server_id`` 来源，否则是本地
+        内容指纹；后者不是官方唯一 ID，详见 :mod:`boss.message_identity`。
+        """
+        path = self.messages_path(name)
+        rows = []
+        for message in messages:
+            text = message_value(message, "text", "")
+            sender = message_value(message, "sender", "")
+            kind = message_value(message, "kind", "")
+            timestamp = message_timestamp_value(message)
+            message_id = message_id_value(message)
+            dedup_key, dedup_source = message_identity(message, conversation_id)
+            rows.append(
+                {
+                    "text": str(text or ""),
+                    "sender": str(sender or ""),
+                    "kind": str(kind or ""),
+                    "timestamp": str(timestamp or ""),
+                    "message_id": str(message_id or ""),
+                    "conversation_id": str(conversation_id or ""),
+                    "dedup_key": dedup_key,
+                    "dedup_source": dedup_source,
+                }
+            )
+        # 和状态/APK 基线一样，先写同目录临时文件并原子替换，避免进程
+        # 中断留下半个 JSON，后续去重读取时误判为有效数据。
+        directory = os.path.dirname(os.path.abspath(path))
+        fd, temporary = tempfile.mkstemp(
+            prefix=".messages-", suffix=".tmp", dir=directory
+        )
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                json.dump(rows, fh, ensure_ascii=False, indent=2)
+                fh.write("\n")
+                fh.flush()
+                os.fsync(fh.fileno())
+            os.replace(temporary, path)
+        except Exception:
+            try:
+                os.unlink(temporary)
+            except OSError:
+                pass
+            raise
         return path
 
     def close(self) -> None:
