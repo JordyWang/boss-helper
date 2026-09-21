@@ -27,9 +27,10 @@ limits:
   max_apply_per_day: 100
 
 safety:
-  # 逐个职位手动确认:点"立即沟通"前在终端提示
-  #   y=投递  n=跳过该职位  q=停止本次运行
-  confirm_before_apply: true
+  # 逐个职位手动确认(全自动模式设为 false;为 true 时点"立即沟通"前在终端确认)
+  confirm_before_apply: false
+  # 本地记录:把每条动作写入 CSV(时间/动作/职位/薪资/公司/说明)
+  records_csv: ".state/records.csv"
 
 filters:
   # 职位标题命中以下任一词则跳过

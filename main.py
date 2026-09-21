@@ -2,10 +2,12 @@
 """命令行入口。
 
 用法:
-    python main.py run              # 执行批量沟通投递
+    python main.py run              # 执行批量沟通投递(全自动 / 或按 safety.confirm_before_apply 确认)
     python main.py dump             # dump 当前界面(校准选择器用)
     python main.py status           # 查看今日投递状态
+    python main.py records          # 查看本地投递记录 CSV
     python main.py reset-today      # 清空今日计数(谨慎)
+    python main.py op <name>        # 单独跑一个原子操作(调试用)
 """
 from __future__ import annotations
 
@@ -120,6 +122,33 @@ def cmd_status(args) -> int:
     cfg = load_config(args.config)
     log.info("今日已投递: %d / %d", state.applied_today, cfg.limits.max_apply_per_day)
     log.info("历史处理职位数: %d", len(state.applied_keys()))
+    log.info("本地记录: %s", cfg.safety.records_csv)
+    return 0
+
+
+def cmd_records(args) -> int:
+    log = setup_logger()
+    cfg = load_config(args.config)
+    path = cfg.safety.records_csv
+    if not path:
+        log.error("未在配置中启用本地记录")
+        return 1
+    import csv, os
+
+    if not os.path.exists(path):
+        log.info("暂无本地记录: %s", path)
+        return 0
+    with open(path, "r", encoding="utf-8-sig") as fh:
+        rows = list(csv.reader(fh))
+    if not rows:
+        log.info("记录文件为空")
+        return 0
+    header, body = rows[0], rows[1:]
+    tail = body[-args.tail:]
+    log.info("%s  共 %d 条,显示最后 %d 条", path, len(body), len(tail))
+    print(" | ".join(header))
+    for r in tail:
+        print(" | ".join(r))
     return 0
 
 
@@ -141,6 +170,10 @@ def main(argv=None) -> int:
     sub.add_parser("dump", help="dump 当前界面用于校准选择器").set_defaults(func=cmd_dump)
     sub.add_parser("status", help="查看今日投递状态").set_defaults(func=cmd_status)
     sub.add_parser("reset-today", help="重置今日计数").set_defaults(func=cmd_reset_today)
+
+    rec = sub.add_parser("records", help="查看本地投递记录 CSV")
+    rec.add_argument("--tail", type=int, default=20, help="显示最后 N 条,默认 20")
+    rec.set_defaults(func=cmd_records)
 
     op = sub.add_parser("op", help="单独执行一个原子操作(调试用)")
     op.add_argument(

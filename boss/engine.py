@@ -10,6 +10,7 @@ from .filters import JobFilter
 from .pages.home import HomePage
 from .pages.job_detail import JobDetailPage
 from .pages.chat import ChatPage
+from .records import Recorder
 from .state import State
 
 
@@ -24,6 +25,8 @@ class ApplyEngine:
         self.home = HomePage(d, cfg.timing, log)
         self.detail = JobDetailPage(d, cfg.timing, log)
         self.chat = ChatPage(d, cfg.timing, log)
+        path = cfg.safety.records_csv
+        self.recorder = Recorder(path) if path else None
         self._stop = False
 
     def _confirm(self, title: str, salary: str, company: str) -> str:
@@ -54,6 +57,10 @@ class ApplyEngine:
     def _key(self, title: str, salary: str, company: str = "") -> str:
         return f"{title}|{salary}|{company}".strip()
 
+    def _record(self, action: str, title: str = "", salary: str = "", company: str = "", note: str = "") -> None:
+        if self.recorder is not None:
+            self.recorder.add(action, title, salary, company, note)
+
     def _process_card(self, card, applied_this_run: int) -> int:
         """处理单个卡片;返回更新后的本次已投递数。"""
         title = card.title
@@ -72,6 +79,7 @@ class ApplyEngine:
         if not decision.accept:
             self.log.info("跳过[%s] %s (%s)", decision.reason, title, salary)
             self.state.mark_skipped(key)
+            self._record("filtered", title, salary, company, decision.reason)
             return applied_this_run
 
         if self.cfg.safety.confirm_before_apply:
@@ -83,6 +91,7 @@ class ApplyEngine:
             if choice != "y":
                 self.log.info("用户跳过: %s", title)
                 self.state.mark_skipped(key)
+                self._record("skipped", title, salary, company, "用户手动跳过")
                 return applied_this_run
 
         card.click()
@@ -94,6 +103,7 @@ class ApplyEngine:
 
         if not self.detail.communicate():
             self.log.warning("未找到'立即沟通'按钮,跳过: %s", detail_title)
+            self._record("error", detail_title, detail_salary, company, "未找到'立即沟通'按钮")
             self.home.back_to_list()
             return applied_this_run
 
@@ -112,6 +122,7 @@ class ApplyEngine:
             detail_title,
             detail_salary,
         )
+        self._record("applied", detail_title, detail_salary, company)
 
         self.home.back_to_list()
         return applied_this_run
@@ -151,6 +162,10 @@ class ApplyEngine:
                     applied = self._process_card(card, applied)
                 except Exception as exc:  # 单个职位失败不影响整体
                     self.log.error("处理卡片出错: %s", exc)
+                    try:
+                        self._record("error", card.title, card.salary, card.company, f"异常:{exc}")
+                    except Exception:
+                        pass
                     self.d.press("back")
                     self.home.human_delay()
                 self.home.job_delay()
@@ -158,5 +173,7 @@ class ApplyEngine:
             if not self._stop and self._within_limits(applied):
                 self.home.scroll()
 
+        if self.recorder is not None:
+            self.recorder.close()
         self.log.info("本次运行结束,共建立沟通 %d 个,今日累计 %d", applied, self.state.applied_today)
         return applied
