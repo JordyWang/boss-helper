@@ -1,0 +1,12 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# 运行产物:日志、UI dump、截图(含聊天内容,勿提交)
+logs/
+
+# 运行状态(投递计数/去重)
+.state/

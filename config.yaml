@@ -1,0 +1,41 @@
+# Boss直聘自动化投递配置
+# 修改后无需改代码。所有元素选择器在 boss/selectors.py 中集中校准。
+
+app:
+  package: com.hpbr.bosszhipin
+
+device:
+  # 留空则自动连接唯一设备;多设备时填 adb serial(adb devices 查看)
+  serial: ""
+
+greeting:
+  # 打招呼语,可配置多条,运行时随机选一条发送。
+  # 注意:Boss 点击"立即沟通"后通常会自动发送你在 App 内预设的招呼语,
+  # 若你已用 App 预设,可把 send_manual 设为 false,这里仅作兜底。
+  messages:
+    - "您好,我对该岗位很感兴趣,期待与您进一步沟通!"
+    - "您好,我的经历与该岗位匹配,方便聊聊吗?"
+  # 是否在会话中手动输入并发送招呼语
+  send_manual: false
+  # 是否尝试点击"发送简历"(部分岗位会弹出)
+  send_resume: false
+
+limits:
+  # 单次运行最多建立的会话数
+  max_apply_per_run: 30
+  # 每日累计上限(风控保护,跨运行累计)
+  max_apply_per_day: 100
+
+filters:
+  # 职位标题命中以下任一词则跳过
+  exclude_keywords: ["销售", "保险", "客服", "地推"]
+  # 非空时,标题必须命中其中之一才投递
+  include_keywords: []
+  # 最低薪资门槛(单位 K),0 表示不限制
+  min_salary: 0
+
+timing:
+  # 每个操作后的随机延时区间(秒),模拟人工,降低风控风险
+  action_delay: [0.8, 2.0]
+  # 每个职位之间的随机延时区间(秒)
+  between_jobs: [3.0, 8.0]
