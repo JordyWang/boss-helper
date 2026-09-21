@@ -22,22 +22,28 @@ _TIME_LABEL_RE = re.compile(
     r"^(?:\d{1,4}[/-]\d{1,2}(?:[/-]\d{1,2})?(?:\s+\d{1,2}:\d{2})?|\d{1,2}:\d{2})$"
 )
 
-# 聊天页顶部快捷操作、卡片按钮和已读状态都有文本节点，但它们不是
-# 对话内容。按 resource-id 优先过滤，兼容同一文字出现在真实消息中的情况。
-_NON_MESSAGE_RESOURCE_IDS = {
+# 标题栏文本不是消息；快捷操作、卡片按钮和已读状态则要保留为 action
+# 消息，因为它们代表会话中的业务事件（例如“同意”“复制微信号”）。
+_HEADER_RESOURCE_IDS = {
+    "tv_title",
+    "tv_sub_title",
+}
+_ACTION_RESOURCE_IDS = {
     "mtextview",
     "tv_button",
     "tv_dialog_btn_left",
     "tv_dialog_btn_right",
     "mmsgtvstatus",
-    "tv_title",
-    "tv_sub_title",
+    "iv_msg_status",
+    "iv_content_status",
 }
-_NON_MESSAGE_TEXTS = {
+_ACTION_TEXTS = {
     "换电话",
     "查看微信",
     "发简历",
     "不感兴趣",
+    "拒绝",
+    "同意",
     "复制微信号",
     "已读",
 }
@@ -226,9 +232,13 @@ class ChatPage(BasePage):
         return out
 
     def read_messages(self, settle_seconds: float = 1.2) -> List[Message]:
-        """解析会话气泡列表。以输入框顶部为界,消息区内的可见文本节点即气泡;
-        依据水平位置判定发送方(右 55%+ = 我方,左 45%- = 对方,中间 = 系统)。
-        Boss 无稳定的消息 resource-id,故此启发式跨版本更耐用。"""
+        """解析会话气泡和业务动作节点。
+
+        以输入框顶部为界，普通文本依据水平位置判定发送方；“换电话、同意、
+        复制微信号、已读”等控件文本保留为 ``sender=system, kind=action``，
+        这样归档不会丢失会话中的业务事件。Boss 无稳定的消息 resource-id，
+        因此仍采用启发式解析。
+        """
         try:
             inp = self.el(S.CHAT["input"])
             if not inp.wait(timeout=3.0):
@@ -268,21 +278,26 @@ class ChatPage(BasePage):
             if not (180 < cy < input_top - 10):
                 continue
             rid_lc = a["resource-id"].lower().rsplit("/", 1)[-1]
-            if rid_lc in _NON_MESSAGE_RESOURCE_IDS:
+            if rid_lc in _HEADER_RESOURCE_IDS:
                 continue
-            if label in _NON_MESSAGE_TEXTS or _TIME_LABEL_RE.fullmatch(label):
+            if _TIME_LABEL_RE.fullmatch(label):
                 continue
+            is_action = rid_lc in _ACTION_RESOURCE_IDS or label in _ACTION_TEXTS
             # 过滤整个容器/整行:宽度覆盖大半个屏幕的节点视为容器,不是气泡
             if (x2 - x1) > screen_w * 0.9:
                 continue
-            cx = (x1 + x2) // 2
-            if cx > screen_w * 0.55:
-                sender = "me"
-            elif cx < screen_w * 0.45:
-                sender = "them"
-            else:
+            if is_action:
                 sender = "system"
-            kind = "text"
+                kind = "action"
+            else:
+                cx = (x1 + x2) // 2
+                if cx > screen_w * 0.55:
+                    sender = "me"
+                elif cx < screen_w * 0.45:
+                    sender = "them"
+                else:
+                    sender = "system"
+                kind = "text"
             if "resume" in rid_lc or "附件简历" in label or "已发送简历" in label:
                 kind = "resume"
             message_id = (

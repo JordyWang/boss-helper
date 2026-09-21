@@ -68,6 +68,10 @@ APK（14.160）提供给 UI hierarchy 的只有控件 `resource-id`、`index`、
 - 当前 UI 方案使用“会话上下文 + sender + kind + 规范化文本 + 可选时间戳”
   的 SHA-256 内容指纹（`content`）。
 
+聊天页中的“换电话、查看微信、发简历、同意、拒绝、复制微信号、已读”等
+业务操作节点也会归档为 `sender=system`、`kind=action` 的消息，不会因为它们
+是按钮而丢失；普通消息仍使用 `kind=text`，简历事件使用 `kind=resume`。
+
 当前聊天页会把标题栏副标题（当前版本格式为“公司 · 职位”）和招聘者名称
 组合为本地会话上下文，例如
 `company=梦虎网络|job_title=ceo|recruiter=尚先生`。它不是 Boss 官方

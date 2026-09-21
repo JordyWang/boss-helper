@@ -34,7 +34,7 @@ class Job:
 class Message(NamedTuple):
     text: str
     sender: str  # 'me' | 'them' | 'system'
-    kind: str  # 'text' | 'resume'
+    kind: str  # 'text' | 'action' | 'resume'
     # 当前 UI 解析器没有这些字段；保留可选槽位，接入服务端/API 数据后
     # 可以无损升级到真正的消息 ID/时间戳，而不改变上层端口。
     timestamp: str = ""

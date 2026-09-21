@@ -98,7 +98,7 @@ class MessageIdentityTest(unittest.TestCase):
         self.assertEqual(attrs["id"], "")
         self.assertEqual(attrs["message-id"], "server-1")
 
-    def test_message_reader_excludes_controls_and_decodes_xml_newlines(self):
+    def test_message_reader_keeps_actions_and_decodes_xml_newlines(self):
         xml = textwrap.dedent(
             '''
             <hierarchy>
@@ -115,7 +115,12 @@ class MessageIdentityTest(unittest.TestCase):
             logging.getLogger("test-message-reader"),
         )
         messages = page.read_messages(settle_seconds=0)
-        self.assertEqual([message.text for message in messages], ["真实消息\n第二行"])
+        self.assertEqual(
+            [message.text for message in messages],
+            ["换电话", "真实消息\n第二行", "复制微信号"],
+        )
+        self.assertEqual([message.kind for message in messages], ["action", "text", "action"])
+        self.assertEqual([message.sender for message in messages], ["system", "them", "system"])
 
     def test_content_fingerprint_normalizes_whitespace_but_keeps_sender(self):
         first = Message("你好  世界", "them", "text")
