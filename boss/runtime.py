@@ -27,8 +27,10 @@ def create_engine(
 
         device = connect(cfg.serial, log)
 
-    from .device import ensure_app
+    from .device import ensure_app, record_app_version
 
+    # 先记录安装基线，再按需要把 App 切到前台；版本未变化时不会重复写入。
+    record_app_version(device, cfg.package, cfg.safety.app_version_path, log)
     ensure_app(device, cfg.package, log)
     if state is None:
         state = State(cfg.safety.state_path)

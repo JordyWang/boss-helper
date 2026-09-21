@@ -69,9 +69,15 @@ def cmd_op(args: Any) -> int:
         return 2
 
     if spec.requires_device:
-        from .device import connect, ensure_app
+        from .device import connect, ensure_app, record_app_version
 
         ctx.device = connect(cfg.serial, log)
+        record_app_version(
+            ctx.device,
+            cfg.package,
+            cfg.safety.app_version_path,
+            log,
+        )
         if spec.ensure_app:
             ensure_app(ctx.device, cfg.package, log)
 

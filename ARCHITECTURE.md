@@ -55,6 +55,21 @@ logs/20260921_231500/
 状态 JSON 使用临时文件写入后 `os.replace` 原子替换；运行锁使用
 `O_CREAT|O_EXCL` 原子创建，避免两个进程同时取得设备控制权。
 
+## 当前真机与 APK 基线
+
+最近一次从已连接设备读取（2026-09-22）：
+
+- 包名：`com.hpbr.bosszhipin`
+- `versionName`：`14.160`
+- `versionCode`：`1416010`
+- 设备：Redmi K30i 5G，Android 12，1080×2400
+- 安装/更新时间：2026-09-21 22:39:43
+
+选择器校准和 UI dump 结果应注明对应 APK 版本；升级 App 后先重新执行
+`python3 main.py dump` 并复核 `boss/selectors.py`。
+运行时会把首次检测到的版本保存到 `.state/app_version.json`；同版本后续运行
+不会重复写入或刷 `run.log`，只有检测到版本变化时才更新基线。
+
 ## 无真机测试
 
 核心编排使用端口协议，可以直接运行：

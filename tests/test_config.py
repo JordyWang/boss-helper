@@ -26,11 +26,13 @@ greeting:
 safety:
   records_db: ""
   state_path: "tmp/state.json"
+  app_version_path: "tmp/app-version.json"
 """
         )
         self.assertFalse(cfg.greeting.send_manual)
         self.assertEqual(cfg.safety.records_db, "")
         self.assertEqual(cfg.safety.state_path, "tmp/state.json")
+        self.assertEqual(cfg.safety.app_version_path, "tmp/app-version.json")
 
     def test_invalid_section_is_reported(self):
         with self.assertRaises(ConfigError):

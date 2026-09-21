@@ -33,6 +33,7 @@ class Safety:
     confirm_before_apply: bool = False
     records_db: str = ".state/records.db"
     state_path: str = ".state/state.json"
+    app_version_path: str = ".state/app_version.json"
 
 
 @dataclass
@@ -185,6 +186,9 @@ def load_config(path: str = "config.yaml") -> AppConfig:
             confirm_before_apply=_bool(saf.get("confirm_before_apply"), False),
             records_db=_path(saf.get("records_db"), ".state/records.db"),
             state_path=_path(saf.get("state_path"), ".state/state.json"),
+            app_version_path=_path(
+                saf.get("app_version_path"), ".state/app_version.json"
+            ),
         ),
         filters=Filters(
             include_keywords=_string_list(fil.get("include_keywords"), []),

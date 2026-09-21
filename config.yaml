@@ -33,6 +33,8 @@ safety:
   records_db: ".state/records.db"
   # 运行状态:每日计数与职位去重 key
   state_path: ".state/state.json"
+  # APK 安装版本基线:仅首次检测或版本变化时写入
+  app_version_path: ".state/app_version.json"
 
 filters:
   # 职位标题命中以下任一词则跳过
