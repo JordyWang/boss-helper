@@ -3,6 +3,7 @@ import unittest
 
 from boss.config import Timing
 from boss.pages.base import BasePage
+from boss.selectors import DETAIL
 
 
 class _Element:
@@ -40,6 +41,10 @@ class BasePageTest(unittest.TestCase):
         self.assertFalse(page.wait({}))
         self.assertEqual(page.text_of({}), "")
         self.assertFalse(page.click({}))
+
+    def test_resume_buttons_require_enabled_state(self):
+        self.assertTrue(DETAIL["resume_agree_btn"]["enabled"])
+        self.assertTrue(DETAIL["resume_reject_btn"]["enabled"])
 
 
 if __name__ == "__main__":

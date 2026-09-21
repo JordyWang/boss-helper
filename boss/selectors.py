@@ -37,9 +37,17 @@ DETAIL = {
     "communicate_btn": {"resourceId": "com.hpbr.bosszhipin:id/btn_chat"},
     # 招聘者姓名
     "boss_name": {"resourceId": "com.hpbr.bosszhipin:id/tv_boss_name"},
-    # 沟通后可能弹出的"附件简历请求"对话框(招聘者索要简历)
-    "resume_agree_btn": {"resourceId": "com.hpbr.bosszhipin:id/tv_dialog_btn_right"},
-    "resume_reject_btn": {"resourceId": "com.hpbr.bosszhipin:id/tv_dialog_btn_left"},
+    # 沟通后可能弹出的"附件简历请求"对话框(招聘者索要简历)。
+    # 同一 resource-id 也会出现在聊天中的"交换微信"卡片里，但卡片按钮
+    # 在未触发时是 enabled=false；限定 enabled=True，避免误判/误点。
+    "resume_agree_btn": {
+        "resourceId": "com.hpbr.bosszhipin:id/tv_dialog_btn_right",
+        "enabled": True,
+    },
+    "resume_reject_btn": {
+        "resourceId": "com.hpbr.bosszhipin:id/tv_dialog_btn_left",
+        "enabled": True,
+    },
     # 兼容旧字段
     "confirm_send_resume": {"text": "发送简历"},
     "continue_chat": {"textContains": "继续"},
