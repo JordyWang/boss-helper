@@ -22,9 +22,14 @@ greeting:
 
 limits:
   # 单次运行最多建立的会话数
-  max_apply_per_run: 30
+  max_apply_per_run: 3
   # 每日累计上限(风控保护,跨运行累计)
   max_apply_per_day: 100
+
+safety:
+  # 逐个职位手动确认:点"立即沟通"前在终端提示
+  #   y=投递  n=跳过该职位  q=停止本次运行
+  confirm_before_apply: true
 
 filters:
   # 职位标题命中以下任一词则跳过

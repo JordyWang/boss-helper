@@ -21,6 +21,11 @@ class Limits:
 
 
 @dataclass
+class Safety:
+    confirm_before_apply: bool = False
+
+
+@dataclass
 class Filters:
     include_keywords: List[str] = field(default_factory=list)
     exclude_keywords: List[str] = field(default_factory=list)
@@ -40,6 +45,7 @@ class AppConfig:
     serial: str = ""
     greeting: Greeting = field(default_factory=Greeting)
     limits: Limits = field(default_factory=Limits)
+    safety: Safety = field(default_factory=Safety)
     filters: Filters = field(default_factory=Filters)
     timing: Timing = field(default_factory=Timing)
 
@@ -61,6 +67,7 @@ def load_config(path: str = "config.yaml") -> AppConfig:
     dev = raw.get("device", {}) or {}
     greet = raw.get("greeting", {}) or {}
     lim = raw.get("limits", {}) or {}
+    saf = raw.get("safety", {}) or {}
     fil = raw.get("filters", {}) or {}
     tim = raw.get("timing", {}) or {}
 
@@ -75,6 +82,9 @@ def load_config(path: str = "config.yaml") -> AppConfig:
         limits=Limits(
             max_apply_per_run=int(lim.get("max_apply_per_run", 30)),
             max_apply_per_day=int(lim.get("max_apply_per_day", 100)),
+        ),
+        safety=Safety(
+            confirm_before_apply=bool(saf.get("confirm_before_apply", False)),
         ),
         filters=Filters(
             include_keywords=list(fil.get("include_keywords", []) or []),

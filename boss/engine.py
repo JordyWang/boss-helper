@@ -24,6 +24,23 @@ class ApplyEngine:
         self.home = HomePage(d, cfg.timing, log)
         self.detail = JobDetailPage(d, cfg.timing, log)
         self.chat = ChatPage(d, cfg.timing, log)
+        self._stop = False
+
+    def _confirm(self, title: str, salary: str, company: str) -> str:
+        """终端手动确认。返回 'y'(投递)/'n'(跳过)/'q'(停止)。"""
+        prompt = f"\n>>> 是否沟通该职位? {title} | {salary} | {company}\n    [y]投递 / [n]跳过 / [q]停止: "
+        while True:
+            try:
+                ans = input(prompt).strip().lower()
+            except (EOFError, KeyboardInterrupt):
+                return "q"
+            if ans in ("y", "yes"):
+                return "y"
+            if ans in ("n", "no", "skip", ""):
+                return "n"
+            if ans in ("q", "quit", "stop"):
+                return "q"
+            print("    请输入 y / n / q")
 
     def _within_limits(self, applied_this_run: int) -> bool:
         if applied_this_run >= self.cfg.limits.max_apply_per_run:
@@ -56,6 +73,17 @@ class ApplyEngine:
             self.log.info("跳过[%s] %s (%s)", decision.reason, title, salary)
             self.state.mark_skipped(key)
             return applied_this_run
+
+        if self.cfg.safety.confirm_before_apply:
+            choice = self._confirm(title, salary, company)
+            if choice == "q":
+                self.log.info("用户选择停止,结束本次运行")
+                self._stop = True
+                return applied_this_run
+            if choice != "y":
+                self.log.info("用户跳过: %s", title)
+                self.state.mark_skipped(key)
+                return applied_this_run
 
         card.click()
         self.home.human_delay()
@@ -100,7 +128,7 @@ class ApplyEngine:
         max_scrolls = 50
 
         for scroll in range(max_scrolls):
-            if not self._within_limits(applied):
+            if self._stop or not self._within_limits(applied):
                 break
 
             cards = self.home.job_cards()
@@ -117,7 +145,7 @@ class ApplyEngine:
             self.log.info("第 %d 屏,发现 %d 个卡片", scroll + 1, len(cards))
 
             for card in cards:
-                if not self._within_limits(applied):
+                if self._stop or not self._within_limits(applied):
                     break
                 try:
                     applied = self._process_card(card, applied)
@@ -127,7 +155,7 @@ class ApplyEngine:
                     self.home.human_delay()
                 self.home.job_delay()
 
-            if self._within_limits(applied):
+            if not self._stop and self._within_limits(applied):
                 self.home.scroll()
 
         self.log.info("本次运行结束,共建立沟通 %d 个,今日累计 %d", applied, self.state.applied_today)
