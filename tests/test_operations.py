@@ -112,6 +112,9 @@ class _MessagesChat:
     def summarize(self, messages):
         return "我方 0 / 对方 1 / 领先 -1"
 
+    def conversation_id(self):
+        return "company=甲公司|job_title=Python工程师|recruiter=甲先生"
+
 
 class OperationRegistryTest(unittest.TestCase):
     def test_registry_declares_expected_operations_and_dependencies(self):
@@ -273,6 +276,10 @@ class OperationExecutionTest(unittest.TestCase):
                     rows = json.load(fh)
                 self.assertEqual(rows[0]["text"], "你好")
                 self.assertEqual(rows[0]["sender"], "them")
+                self.assertEqual(
+                    rows[0]["conversation_id"],
+                    "company=甲公司|job_title=Python工程师|recruiter=甲先生",
+                )
                 self.assertTrue(rows[0]["dedup_key"].startswith("content:"))
             finally:
                 artifacts.close()

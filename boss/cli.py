@@ -232,7 +232,7 @@ def build_parser() -> argparse.ArgumentParser:
     op.add_argument(
         "--conversation-id",
         default="",
-        help="messages 去重上下文；没有服务端 ID 时建议传入会话标识",
+        help="messages 去重上下文覆盖值；默认使用公司+职位+招聘者",
     )
     op.add_argument(
         "--rounds",

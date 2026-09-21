@@ -1,5 +1,7 @@
+import logging
 import unittest
 
+from boss.config import Timing
 from boss.domain import Message
 from boss.message_identity import (
     deduplicate_messages,
@@ -9,7 +11,62 @@ from boss.message_identity import (
 from boss.pages.chat import ChatPage
 
 
+class _ContextElement:
+    def __init__(self, text):
+        self.text = text
+
+    def wait(self, timeout):
+        return True
+
+    def get_text(self):
+        return self.text
+
+
+class _ContextDevice:
+    def __init__(self):
+        self.values = {
+            "com.hpbr.bosszhipin:id/tv_title": "尚先生",
+            "com.hpbr.bosszhipin:id/tv_sub_title": "梦虎网络 · ceo",
+        }
+
+    def __call__(self, **selector):
+        return _ContextElement(self.values.get(selector.get("resourceId"), ""))
+
+
 class MessageIdentityTest(unittest.TestCase):
+    def test_conversation_id_contains_company_job_and_recruiter(self):
+        page = ChatPage(
+            _ContextDevice(),
+            Timing((0, 0), (0, 0)),
+            logging.getLogger("test-conversation-context"),
+        )
+        self.assertEqual(
+            page.conversation_context(),
+            {
+                "company": "梦虎网络",
+                "job_title": "ceo",
+                "recruiter": "尚先生",
+                "subtitle": "",
+            },
+        )
+        self.assertEqual(
+            page.conversation_id(),
+            "company=梦虎网络|job_title=ceo|recruiter=尚先生",
+        )
+
+    def test_conversation_subtitle_without_separator_is_not_called_company(self):
+        device = _ContextDevice()
+        device.values["com.hpbr.bosszhipin:id/tv_sub_title"] = "招聘顾问"
+        page = ChatPage(
+            device,
+            Timing((0, 0), (0, 0)),
+            logging.getLogger("test-conversation-fallback"),
+        )
+        self.assertEqual(
+            page.conversation_id(),
+            "recruiter=尚先生|subtitle=招聘顾问",
+        )
+
     def test_ui_attribute_parser_does_not_confuse_resource_id_with_message_id(self):
         attrs = ChatPage._node_attrs(
             '<node text="hello" resource-id="pkg:id/tv_text" '

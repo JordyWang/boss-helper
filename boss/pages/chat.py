@@ -7,6 +7,7 @@ import time
 from typing import List
 
 from ..domain import Message
+from ..message_identity import normalize_message_value
 from .base import BasePage
 from .. import selectors as S
 
@@ -19,18 +20,65 @@ class ChatPage(BasePage):
         """是否处于会话页(以输入框存在为准)。"""
         return self.exists(S.CHAT["chat_flag"], timeout=4.0)
 
-    def conversation_id(self) -> str:
-        """返回可作为本地去重上下文的会话标题。
+    @staticmethod
+    def _split_conversation_subtitle(subtitle: str):
+        """拆分当前版本标题栏的“公司 · 职位”格式。
 
-        当前 APK 的 UI 没有暴露服务端 conversationId，因此这里故意不把
-        标题称为官方 ID；同名招聘者仍可能发生碰撞，调用方可用 CLI 的
-        ``--conversation-id`` 覆盖。
+        不认识分隔符时不猜测公司名，把整段保留为 ``subtitle``，避免把
+        单独的职位名称错误记录成公司。
+        """
+        value = normalize_message_value(subtitle)
+        parts = re.split(r"\s*[·•｜|]\s*", value, maxsplit=1)
+        if len(parts) == 2 and all(parts):
+            return parts[0], parts[1], ""
+        return "", "", value
+
+    @staticmethod
+    def _conversation_component(label: str, value: str) -> str:
+        """生成可读且不易产生分隔符歧义的上下文片段。"""
+        value = normalize_message_value(value)
+        if not value:
+            return ""
+        # conversation_id 会被再次规范化并参与哈希；转义只用于让归档
+        # 中的组合值可逆阅读，不把公司/职位中的竖线误当字段分隔符。
+        value = value.replace("\\", "\\\\").replace("|", "\\|")
+        return f"{label}={value}"
+
+    def conversation_context(self) -> dict:
+        """读取会话栏上下文：公司、职位和招聘者名称。
+
+        APK 当前没有服务端 conversationId；副标题通常是“公司 · 职位”，
+        因此这里仅生成本地上下文，不宣称它是官方 ID。
         """
         try:
-            value = self.text_of(S.CHAT["conversation_title"], timeout=1.0)
+            recruiter = self.text_of(S.CHAT["conversation_title"], timeout=1.0)
+            subtitle = self.text_of(S.CHAT["conversation_subtitle"], timeout=1.0)
         except Exception:
-            return ""
-        return str(value or "").strip()
+            return {"company": "", "job_title": "", "recruiter": "", "subtitle": ""}
+        company, job_title, fallback = self._split_conversation_subtitle(subtitle)
+        return {
+            "company": company,
+            "job_title": job_title,
+            "recruiter": normalize_message_value(recruiter),
+            "subtitle": fallback,
+        }
+
+    def conversation_id(self) -> str:
+        """返回包含公司、职位和招聘者的本地会话上下文标识。
+
+        示例：``company=梦虎网络|job_title=ceo|recruiter=尚先生``。
+        这不是 Boss 官方 conversationId；调用方仍可用 CLI 的
+        ``--conversation-id`` 显式覆盖。
+        """
+        context = self.conversation_context()
+        parts = [
+            self._conversation_component("company", context["company"]),
+            self._conversation_component("job_title", context["job_title"]),
+            self._conversation_component("recruiter", context["recruiter"]),
+        ]
+        if not context["company"] and not context["job_title"]:
+            parts.append(self._conversation_component("subtitle", context["subtitle"]))
+        return "|".join(part for part in parts if part)
 
     def _input(self):
         box = self.el(S.CHAT["input"])

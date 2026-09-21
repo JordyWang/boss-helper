@@ -68,9 +68,11 @@ APK（14.160）提供给 UI hierarchy 的只有控件 `resource-id`、`index`、
 - 当前 UI 方案使用“会话上下文 + sender + kind + 规范化文本 + 可选时间戳”
   的 SHA-256 内容指纹（`content`）。
 
-内容指纹是本地 best-effort 标识，不是 Boss 官方 ID。两个完全相同且没有
-时间戳的消息无法仅靠 UI 可靠区分；需要严格去重时，应从接口或 App 的业务
-数据层取得服务端消息 ID，并通过 `--conversation-id` 提供会话上下文。
+当前聊天页会把标题栏副标题（当前版本格式为“公司 · 职位”）和招聘者名称
+组合为本地会话上下文，例如
+`company=梦虎网络|job_title=ceo|recruiter=尚先生`。它不是 Boss 官方
+`conversationId`；若能从接口取得服务端会话 ID，可通过 `--conversation-id`
+覆盖。两个完全相同且没有时间戳的消息仍无法仅靠 UI 可靠区分。
 
 ## 当前真机与 APK 基线
 
