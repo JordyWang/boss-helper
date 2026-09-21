@@ -7,7 +7,7 @@ from pathlib import Path
 from unittest import mock
 
 from boss.artifacts import RunArtifacts
-from boss.cli import build_parser, cmd_op
+from boss.cli import build_parser, cmd_conversations, cmd_op
 from boss.config import AppConfig
 from boss.domain import Job
 from boss.domain import Message
@@ -231,6 +231,31 @@ class OperationRegistryTest(unittest.TestCase):
         self.assertEqual(args.rounds, 4)
         self.assertEqual(args.title, "工程师")
         self.assertIn("filter-check", parser.parse_args(["op", "filter-check"]).op)
+
+    def test_conversation_shortcut_accepts_positional_id_and_aliases(self):
+        parser = build_parser()
+        conversation_id = "company=甲公司|job_title=工程师|recruiter=甲先生"
+        args = parser.parse_args(["conversations", conversation_id, "-n", "2"])
+        self.assertEqual(args.conversation_id_positional, conversation_id)
+        self.assertEqual(args.count, 2)
+        alias_args = parser.parse_args(["chat", "--id", conversation_id])
+        self.assertEqual(alias_args.conversation_id_option, conversation_id)
+        self.assertFalse(alias_args.list_only)
+
+    def test_conversation_shortcut_delegates_to_conversation_operation(self):
+        args = argparse.Namespace(
+            conversation_id_positional="company=甲公司|job_title=工程师|recruiter=甲先生",
+            conversation_id_option="",
+            count=None,
+            list_only=True,
+            max_scrolls=8,
+            name="",
+        )
+        with mock.patch("boss.cli.cmd_op", return_value=0) as operation:
+            self.assertEqual(cmd_conversations(args), 0)
+        self.assertEqual(args.op, "conversations")
+        self.assertEqual(args.conversation_id, args.conversation_id_positional)
+        operation.assert_called_once_with(args)
 
 
 class OperationExecutionTest(unittest.TestCase):

@@ -106,6 +106,19 @@ def cmd_op(args: Any) -> int:
     return run_operation(ctx)
 
 
+def cmd_conversations(args: Any) -> int:
+    """会话管理的简洁入口，内部复用原子操作组装逻辑。"""
+    positional_id = str(getattr(args, "conversation_id_positional", "") or "").strip()
+    option_id = str(getattr(args, "conversation_id_option", "") or "").strip()
+    if positional_id and option_id and positional_id != option_id:
+        log = _logger(args)
+        log.error("位置参数会话 ID 与 --id/--conversation-id 不一致")
+        return 2
+    args.op = "conversations"
+    args.conversation_id = option_id or positional_id
+    return cmd_op(args)
+
+
 def cmd_dump(args: Any) -> int:
     from tools.dump_ui import dump
 
@@ -202,6 +215,55 @@ def build_parser() -> argparse.ArgumentParser:
     records.add_argument("--format", choices=["table", "csv"], default="table", help="输出格式")
     records.set_defaults(func=cmd_records)
 
+    conversations = sub.add_parser(
+        "conversations",
+        aliases=["conversation", "chat", "chats"],
+        help="列出或按 ID 只读归档会话",
+        description=(
+            "默认只列出当前可见会话 ID；传入 ID 或 --count 后才会打开聊天并保存。"
+        ),
+    )
+    conversations.add_argument(
+        "conversation_id_positional",
+        nargs="?",
+        default="",
+        metavar="ID",
+        help="要匹配的会话 ID（可直接作为位置参数）",
+    )
+    conversations.add_argument(
+        "-i",
+        "--id",
+        "--conversation-id",
+        dest="conversation_id_option",
+        default="",
+        metavar="ID",
+        help="要匹配的会话 ID",
+    )
+    conversations.add_argument(
+        "-n",
+        "--count",
+        type=_non_negative_int,
+        default=None,
+        help="显式归档前 N 个会话",
+    )
+    conversations.add_argument(
+        "--list-only",
+        action="store_true",
+        help="只列出当前可见 ID，不打开聊天",
+    )
+    conversations.add_argument(
+        "--max-scrolls",
+        type=_non_negative_int,
+        default=8,
+        help="按 ID/数量查找时最多滚动次数，默认 8",
+    )
+    conversations.add_argument(
+        "--name",
+        default="",
+        help="归档文件名（扩展名可选）",
+    )
+    conversations.set_defaults(func=cmd_conversations)
+
     op = sub.add_parser(
         "op",
         help="单独执行一个原子操作(调试用)",
@@ -292,6 +354,7 @@ def main(argv=None) -> int:
 
 __all__ = [
     "build_parser",
+    "cmd_conversations",
     "cmd_dump",
     "cmd_op",
     "cmd_records",

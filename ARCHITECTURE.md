@@ -80,20 +80,23 @@ APK（14.160）提供给 UI hierarchy 的只有控件 `resource-id`、`index`、
 
 ## 会话管理
 
-`op conversations` 是只读会话管理入口。默认只进入消息列表并记录当前可见
-会话的 ID，不会自动逐个打开聊天；也可以显式选择一个 ID，或明确指定数量：
+`conversations`（旧入口 `op conversations`）是只读会话管理入口。默认只进入
+消息列表并记录当前可见会话的 ID，不会自动逐个打开聊天；也可以显式选择一个
+ID，或明确指定数量：
 
 ```bash
 # 只列出当前可见会话 ID（不打开聊天）
-python3 main.py op conversations
-python3 main.py op conversations --list-only
+python3 main.py conversations
+python3 main.py conversations --list-only
 
 # 按列表 ID 精确匹配并只打开/保存一个会话
-python3 main.py op conversations \
-  --conversation-id 'company=三横科技|job_title=全栈工程师|recruiter=丘先生'
+python3 main.py conversations \
+  'company=三横科技|job_title=全栈工程师|recruiter=丘先生'
+# 也可以写成 --id 或 --conversation-id
+python3 main.py conversations --id 'company=三横科技|job_title=全栈工程师|recruiter=丘先生'
 
 # 明确要求时才打开前 N 个会话
-python3 main.py op conversations --count 3
+python3 main.py conversations -n 3
 ```
 
 匹配会在当前屏和有限滚动范围内进行（可用 `--max-scrolls` 调整），找不到
