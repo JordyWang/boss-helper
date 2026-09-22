@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """兼容入口；命令实现位于 :mod:`boss.cli`。
 
-常用命令：``run``、``conversations``、``dump``、``status``、``records``、
+常用命令：``ui``、``run``、``conversations``、``dump``、``status``、``records``、
 ``reset-today`` 和 ``op <name>``。
 """
 from __future__ import annotations
@@ -17,6 +17,7 @@ from boss.cli import (
     cmd_reset_today,
     cmd_run,
     cmd_status,
+    cmd_ui,
     main,
 )
 # 兼容旧脚本中从 main 模块导入这些名称的调用方。
@@ -33,6 +34,7 @@ __all__ = [
     "cmd_reset_today",
     "cmd_run",
     "cmd_status",
+    "cmd_ui",
     "ConfigError",
     "State",
     "close_logger",

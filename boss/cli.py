@@ -119,6 +119,20 @@ def cmd_conversations(args: Any) -> int:
     return cmd_op(args)
 
 
+def cmd_ui(args: Any) -> int:
+    """启动本地浏览器可视化界面。"""
+    from .web import serve
+
+    serve(
+        host=getattr(args, "host", "127.0.0.1"),
+        port=getattr(args, "port", 8765),
+        config_path=getattr(args, "config", "config.yaml"),
+        logs_dir=getattr(args, "logs_dir", "logs"),
+        open_browser=not getattr(args, "no_browser", False),
+    )
+    return 0
+
+
 def cmd_dump(args: Any) -> int:
     from tools.dump_ui import dump
 
@@ -264,6 +278,20 @@ def build_parser() -> argparse.ArgumentParser:
     )
     conversations.set_defaults(func=cmd_conversations)
 
+    ui = sub.add_parser(
+        "ui",
+        aliases=["web"],
+        help="启动本地可视化操作界面",
+        description="启动浏览器界面，在页面中查看和归档会话。默认只监听本机。",
+    )
+    ui.add_argument("--host", default="127.0.0.1", help="监听地址，默认 127.0.0.1")
+    ui.add_argument("--port", type=int, default=8765, help="监听端口，默认 8765")
+    ui.add_argument("--logs-dir", default="logs", help="运行归档目录，默认 logs")
+    ui.add_argument("--no-browser", action="store_true", help="启动后不自动打开浏览器")
+    # Web 服务本身不持有运行锁；每次页面按钮操作会单独创建 RunArtifacts，
+    # 否则服务启动后长期占用 .run.lock，会把自己的请求全部挡住。
+    ui.set_defaults(func=cmd_ui, manages_own_artifacts=True)
+
     op = sub.add_parser(
         "op",
         help="单独执行一个原子操作(调试用)",
@@ -332,11 +360,13 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv=None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
-    try:
-        args.artifacts = RunArtifacts.create()
-    except RunInProgressError as exc:
-        print(f"错误: {exc}", file=sys.stderr)
-        return 2
+    args.artifacts = None
+    if not getattr(args, "manages_own_artifacts", False):
+        try:
+            args.artifacts = RunArtifacts.create()
+        except RunInProgressError as exc:
+            print(f"错误: {exc}", file=sys.stderr)
+            return 2
     try:
         return args.func(args)
     except ConfigError as exc:
@@ -349,12 +379,14 @@ def main(argv=None) -> int:
         return 2
     finally:
         close_logger()
-        args.artifacts.close()
+        if args.artifacts is not None:
+            args.artifacts.close()
 
 
 __all__ = [
     "build_parser",
     "cmd_conversations",
+    "cmd_ui",
     "cmd_dump",
     "cmd_op",
     "cmd_records",

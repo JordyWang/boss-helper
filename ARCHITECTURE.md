@@ -32,6 +32,8 @@ cli → OperationContext → OperationSpec(handler)
   `HomePage`、`JobDetailPage` 和 `ChatPage`。
 - `boss/runtime.py` 负责连接设备、切到前台和创建状态仓库。
 - `boss/cli.py` 只处理参数、输出和退出码，`main.py` 只是兼容启动脚本。
+- `boss/web.py` 提供本机浏览器操作台；页面请求仍通过同一套页面对象、运行
+  归档和 `.run.lock` 执行，不另起一套设备控制逻辑。
 
 `filter-check` 只加载配置并在本地评估职位；`health` 连接设备但不会强制
 启动 App；`dry-run` 使用只读状态仓库，只扫描和过滤，不点击卡片、不发送消息、
@@ -105,6 +107,20 @@ python3 main.py conversations -n 3
 这样聊天页副标题变化不会破坏后续按 ID 回查。当前 APK 没有暴露官方会话 ID，
 所以这里的 ID 是本地组合标识；若后续 UI/API 提供服务端 ID，会使用
 `server:<id>` 命名空间并优先匹配。
+
+## 可视化操作台
+
+不想使用命令行时可以启动本地浏览器界面：
+
+```bash
+python3 main.py ui
+```
+
+默认只监听 `127.0.0.1:8765`，启动后会自动打开浏览器。页面提供设备检查、
+截图和 UI dump、批量沟通（按钮确认后才执行），以及会话列表、按 ID 保存和
+按数量保存。每个设备动作都单独创建时间戳运行目录和日志，并经过全局运行锁；
+服务本身不会长期占用 `.run.lock`。也可以用 `python3 main.py ui --no-browser`
+手动打开显示的网址。
 
 ## 当前真机与 APK 基线
 
