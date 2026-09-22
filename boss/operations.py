@@ -10,9 +10,15 @@ from dataclasses import dataclass
 from typing import Any, Callable, Dict, Optional, Tuple
 
 from .application import ApplyService
+from .capture import (
+    record_observation,
+    save_conversation,
+    save_job,
+    save_messages,
+)
 from .config import AppConfig
 from .device import health as device_health
-from .domain import Job
+from .domain import Job, Message
 from .filters import JobFilter
 from .message_identity import normalize_message_value
 from .pages.chat import ChatPage
@@ -36,6 +42,9 @@ class OperationContext:
     conversations: Optional[ConversationListPage] = None
     state: Optional[StatePort] = None
     artifacts: Optional[Any] = None
+    # SQLite Recorder/兼容的数据采集仓库。保持可选，便于无设备单元测试和
+    # 外部调用方继续使用旧版 OperationContext。
+    recorder: Optional[Any] = None
 
 
 @dataclass(frozen=True)
@@ -104,6 +113,67 @@ def _conversations(ctx: OperationContext) -> ConversationListPage:
     return ctx.conversations
 
 
+def _run_id(ctx: OperationContext) -> str:
+    artifacts = ctx.artifacts or getattr(ctx.log, "run_artifacts", None)
+    return str(getattr(artifacts, "run_id", "") or "")
+
+
+def _save_job(ctx: OperationContext, job: Any, source: str) -> None:
+    save_job(ctx.recorder, job, source=source, run_id=_run_id(ctx), log=ctx.log)
+
+
+def _save_conversation_preview(ctx: OperationContext, entry: Any, source: str = "list") -> None:
+    # ConversationPreview.as_dict() 是稳定的可序列化快照；若外部 fake 没有
+    # 该方法，capture 层仍会安全跳过，不影响原有操作。
+    payload: Any = entry
+    try:
+        as_dict = getattr(entry, "as_dict", None)
+        if callable(as_dict):
+            payload = as_dict()
+    except Exception:
+        payload = entry
+    save_conversation(
+        ctx.recorder,
+        payload,
+        run_id=_run_id(ctx),
+        source=source,
+        include_messages=False,
+        log=ctx.log,
+    )
+
+
+def _save_chat_messages(ctx: OperationContext, messages: Any, conversation_id: str = "") -> int:
+    return save_messages(
+        ctx.recorder,
+        messages,
+        conversation_id,
+        run_id=_run_id(ctx),
+        log=ctx.log,
+    )
+
+
+def _safe_object_value(obj: Any, name: str, default: Any = "") -> Any:
+    """读取页面对象属性，兼容方法、普通属性和测试 double。"""
+    try:
+        value = getattr(obj, name, default)
+        if callable(value):
+            value = value()
+        return default if value is None else value
+    except Exception:
+        return default
+
+
+def _observe(ctx: OperationContext, entity_type: str, entity_id: str, payload: Any) -> None:
+    record_observation(
+        ctx.recorder,
+        entity_type,
+        entity_id,
+        payload,
+        run_id=_run_id(ctx),
+        log=ctx.log,
+    )
+
+
 def op_recommend(ctx: OperationContext) -> int:
     ok = _home(ctx).open_recommend()
     ctx.log.info("open_recommend -> %s", ok)
@@ -116,26 +186,64 @@ def op_detail(ctx: OperationContext) -> int:
     if not home.open_recommend():
         return 1
     cards = home.job_cards()
+    for visible_card in cards:
+        try:
+            _save_job(ctx, _job_from_card(visible_card), "detail_screen")
+        except Exception as exc:
+            ctx.log.debug("保存详情页职位屏幕快照失败: %s", exc)
     index = getattr(ctx.args, "index", 0)
     if index < 0 or index >= len(cards):
         ctx.log.error("卡片索引越界: %d (当前共有 %d 张)", index, len(cards))
         return 1
     card = cards[index]
     job = _job_from_card(card)
+    _save_job(ctx, job, "detail_card")
     ctx.log.info("点进第 %d 个: %s | %s | %s", index, job.title, job.salary, job.company)
     card.click()
     home.human_delay()
-    ctx.log.info("详情页标题=%s 薪资=%s", detail.title(), detail.salary())
+    detail_title = detail.title()
+    detail_salary = detail.salary()
+    detail_company = _safe_object_value(detail, "company", job.company)
+    _save_job(
+        ctx,
+        Job.from_values(detail_title or job.title, detail_salary or job.salary, detail_company or job.company),
+        "detail",
+    )
+    _observe(
+        ctx,
+        "job_detail",
+        job.key,
+        {
+            "title": detail_title or job.title,
+            "salary": detail_salary or job.salary,
+            "company": detail_company or job.company,
+        },
+    )
+    ctx.log.info("详情页标题=%s 薪资=%s", detail_title, detail_salary)
     return 0
 
 
 def op_read(ctx: OperationContext) -> int:
     detail = _detail(ctx)
+    title = detail.title()
+    salary = detail.salary()
+    boss_name = detail.boss_name()
+    _save_job(
+        ctx,
+        Job.from_values(title, salary, _safe_object_value(detail, "company", "")),
+        "detail_read",
+    )
+    _observe(
+        ctx,
+        "job_detail",
+        Job.from_values(title, salary, _safe_object_value(detail, "company", "")).key,
+        {"title": title, "salary": salary, "boss_name": boss_name},
+    )
     ctx.log.info(
         "当前详情页: 标题=%s 薪资=%s boss=%s",
-        detail.title(),
-        detail.salary(),
-        detail.boss_name(),
+        title,
+        salary,
+        boss_name,
     )
     return 0
 
@@ -158,6 +266,17 @@ def op_send(ctx: OperationContext) -> int:
         ctx.log.error("无消息内容,用 --text 指定")
         return 1
     ok = chat.send_message(text)
+    if ok:
+        # 发送成功本身也是会话数据；若随后设备断开，仍保留我方这条消息。
+        conversation_id = str(getattr(ctx.args, "conversation_id", "") or "")
+        if not conversation_id:
+            getter = getattr(chat, "conversation_id", None)
+            if callable(getter):
+                try:
+                    conversation_id = str(getter() or "")
+                except Exception:
+                    conversation_id = ""
+        _save_chat_messages(ctx, [Message(text, "me", "text")], conversation_id)
     ctx.log.info("在会话页发送 -> %s", ok)
     return 0 if ok else 1
 
@@ -168,19 +287,37 @@ def op_messages(ctx: OperationContext) -> int:
         ctx.log.error("当前不在会话页")
         return 1
     messages = chat.read_messages()
-    ctx.log.info("读到 %d 条气泡 (%s)", len(messages), chat.summarize(messages))
+    conversation_id = getattr(ctx.args, "conversation_id", "") or ""
+    if not conversation_id:
+        getter = getattr(chat, "conversation_id", None)
+        if callable(getter):
+            try:
+                conversation_id = str(getter() or "")
+            except Exception:
+                conversation_id = ""
+    # 先写 SQLite，再生成本次运行的 JSON 归档；这样即使后续文件归档失败，
+    # 已经从设备读到的消息仍然可查询。
+    _save_chat_messages(ctx, messages, conversation_id)
+    try:
+        summary = chat.summarize(messages)
+    except Exception:
+        summary = "摘要失败"
+    ctx.log.info("读到 %d 条气泡 (%s)", len(messages), summary)
+    context = _safe_object_value(chat, "conversation_context", {})
+    if isinstance(context, dict) or conversation_id:
+        save_conversation(
+            ctx.recorder,
+            {
+                "conversation_id": conversation_id,
+                "context": context if isinstance(context, dict) else {},
+            },
+            run_id=_run_id(ctx),
+            source="messages",
+            include_messages=False,
+            log=ctx.log,
+        )
     artifacts = ctx.artifacts or getattr(ctx.log, "run_artifacts", None)
     if artifacts is not None:
-        conversation_id = getattr(ctx.args, "conversation_id", "") or ""
-        if not conversation_id:
-            # 标题只是上下文，不是 Boss 的官方会话 ID；如果调用方能拿到
-            # 服务端 ID，应通过 --conversation-id 或 API 数据显式传入。
-            getter = getattr(chat, "conversation_id", None)
-            if callable(getter):
-                try:
-                    conversation_id = str(getter() or "")
-                except Exception:
-                    conversation_id = ""
         path = artifacts.save_messages(
             messages,
             getattr(ctx.args, "name", "") or None,
@@ -248,6 +385,7 @@ def _capture_conversation(
     """打开一个列表项、读取并保存，然后返回 ``(saved, back_ok)``。"""
     entry_id = _conversation_entry_id(entry)
     label = getattr(entry, "name", "") or entry_id or "<未知会话>"
+    _save_conversation_preview(ctx, entry)
     if not listing.open_conversation(entry):
         ctx.log.warning("会话打开失败，跳过: %s", label)
         return False, True
@@ -257,7 +395,6 @@ def _capture_conversation(
     try:
         if not chat.in_chat():
             raise RuntimeError("打开后未进入聊天页")
-        messages = list(chat.read_messages() or [])
         context = _safe_chat_value(chat, "conversation_context", {})
         if not isinstance(context, dict):
             context = {}
@@ -268,6 +405,10 @@ def _capture_conversation(
         conversation_id = entry_id or chat_id
         if not conversation_id:
             ctx.log.warning("会话没有可用 ID，将保存但无法稳定回查: %s", label)
+        # 设备返回的消息一旦拿到就写入 SQLite；JSON 归档仍作为本次运行的
+        # 可移交文件保留。读取上下文在前只为尽早拿到正确的去重会话 ID。
+        messages = list(chat.read_messages() or [])
+        message_count = _save_chat_messages(ctx, messages, conversation_id)
         artifacts = ctx.artifacts or getattr(ctx.log, "run_artifacts", None)
         if artifacts is None:
             raise RuntimeError("当前运行没有归档上下文")
@@ -284,6 +425,16 @@ def _capture_conversation(
             "list_preview": preview,
             "messages": messages,
         }
+        # 会话摘要和完整消息一起幂等写入 SQLite；消息已经在上一步落库，
+        # 这里的调用主要补充公司/职位/联系人等上下文。
+        save_conversation(
+            ctx.recorder,
+            payload,
+            run_id=_run_id(ctx),
+            source="chat",
+            include_messages=message_count == 0,
+            log=ctx.log,
+        )
         path = artifacts.save_conversation(
             payload, name=archive_name
         )
@@ -309,6 +460,7 @@ def _list_conversation_ids(ctx: OperationContext, listing: ConversationListPage)
         ctx.log.warning("当前没有可读取的会话行")
         return 0
     for index, entry in enumerate(entries, 1):
+        _save_conversation_preview(ctx, entry)
         ctx.log.info(
             "会话[%d] id=%s | %s | %s | %s",
             index,
@@ -406,10 +558,19 @@ def op_conversations(ctx: OperationContext) -> int:
         finder = getattr(listing, "find_by_id", None)
         if callable(finder):
             try:
-                entry = finder(target_id, max_scrolls=max_scrolls)
+                entry = finder(
+                    target_id,
+                    max_scrolls=max_scrolls,
+                    on_visible=lambda rows: [
+                        _save_conversation_preview(ctx, row) for row in rows
+                    ],
+                )
             except TypeError:
                 # 兼容只接受一个位置参数的轻量列表页适配器。
-                entry = finder(target_id)
+                try:
+                    entry = finder(target_id, max_scrolls=max_scrolls)
+                except TypeError:
+                    entry = finder(target_id)
         else:
             # 兼容外部调用方传入的旧列表页实现：只在当前屏查找，绝不
             # 退化成无界遍历或自动打开其他会话。
@@ -459,6 +620,7 @@ def op_home(ctx: OperationContext) -> int:
 
 def op_health(ctx: OperationContext) -> int:
     info = device_health(ctx.device, ctx.cfg.package)
+    _observe(ctx, "device_health", str(info.get("package", "") or ""), info)
     ctx.log.info(
         "设备: package=%s activity=%s android=%s model=%s window=%s",
         info.get("package", "?"),
@@ -481,12 +643,14 @@ def op_cards(ctx: OperationContext) -> int:
     ctx.log.info("当前发现 %d 张职位卡片", len(cards))
     for index, card in enumerate(cards):
         job = _job_from_card(card)
+        _save_job(ctx, job, "cards")
         _print_job(ctx, index, job, state.is_seen(job.key))
     return 0
 
 
 def op_screenshot(ctx: OperationContext) -> int:
     path = _home(ctx).screenshot(getattr(ctx.args, "name", "") or None)
+    _observe(ctx, "screenshot", path, {"path": path})
     ctx.log.info("截图已保存: %s", path)
     return 0
 
@@ -501,6 +665,8 @@ def op_scroll(ctx: OperationContext) -> int:
     ctx.log.info("已滚动 %d 次,方向=%s", count, direction)
     cards = home.job_cards()
     ctx.log.info("滚动后当前有 %d 张职位卡片", len(cards))
+    for card in cards:
+        _save_job(ctx, _job_from_card(card), "scroll")
     return 0
 
 
@@ -532,6 +698,19 @@ def op_resume(ctx: OperationContext) -> int:
         ctx.log.error("resume=%s 会处理真实弹窗,确认请加 --yes", action)
         return 2
     ok = chat.handle_resume_action(action, reason="命令行显式操作")
+    if ok:
+        label = "同意" if action == "agree" else "拒绝"
+        conversation_id = str(getattr(ctx.args, "conversation_id", "") or "")
+        if not conversation_id:
+            getter = getattr(chat, "conversation_id", None)
+            if callable(getter):
+                try:
+                    conversation_id = str(getter() or "")
+                except Exception:
+                    conversation_id = ""
+        _save_chat_messages(
+            ctx, [Message(label, "system", "action")], conversation_id
+        )
     ctx.log.info("简历弹窗处理(%s) -> %s", action, ok)
     return 0 if ok else 1
 
@@ -550,10 +729,12 @@ def op_dry_run(ctx: OperationContext) -> int:
         cfg=ctx.cfg,
         state=ctx.state or State(ctx.cfg.safety.state_path, read_only=True),
         log=ctx.log,
+        recorder=ctx.recorder,
     )
     previews = service.preview(getattr(ctx.args, "rounds", 5))
     accepted = 0
     for index, preview in enumerate(previews):
+        _save_job(ctx, preview.job, "dry_run")
         status = "已处理" if preview.seen else ("通过" if preview.accepted else preview.reason)
         if preview.accepted and not preview.seen:
             accepted += 1

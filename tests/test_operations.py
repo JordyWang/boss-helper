@@ -21,6 +21,7 @@ from boss.operations import (
 )
 from boss.logger import close_logger
 from boss.pages.conversations import ConversationPreview
+from boss.records import Recorder
 
 
 class _FakeDevice:
@@ -385,6 +386,40 @@ class OperationExecutionTest(unittest.TestCase):
                 self.assertEqual(chat.read_calls, 0)
                 self.assertEqual(listing.back_calls, 0)
             finally:
+                artifacts.close()
+
+    def test_conversation_reads_are_persisted_to_sqlite_before_json_archive(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            artifacts = self._artifacts(tmp)
+            db_path = Path(tmp) / "records.db"
+            recorder = Recorder(
+                str(db_path), run_id=artifacts.run_id, source="test", log_path=str(artifacts.log_path)
+            )
+            entry = ConversationPreview(0, "甲先生", "甲公司", "工程师", preview="您好")
+            listing = _ConversationListing([entry])
+            chat = _ConversationChat()
+            ctx = OperationContext(
+                args=argparse.Namespace(
+                    conversation_id=entry.conversation_id,
+                    list_only=False,
+                    count=None,
+                    max_scrolls=0,
+                    name="",
+                ),
+                cfg=AppConfig(),
+                log=logging.getLogger("test-conversations-sqlite"),
+                conversations=listing,
+                chat=chat,
+                artifacts=artifacts,
+                recorder=recorder,
+            )
+            try:
+                self.assertEqual(op_conversations(ctx), 0)
+                counts = recorder.counts_by_table()
+                self.assertEqual(counts["conversations"], 1)
+                self.assertEqual(counts["messages"], 1)
+            finally:
+                recorder.close()
                 artifacts.close()
 
     def test_conversations_match_id_and_keep_list_id_as_archive_primary_id(self):

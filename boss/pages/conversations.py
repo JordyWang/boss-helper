@@ -212,6 +212,7 @@ class ConversationListPage(BasePage):
         self,
         conversation_id: str,
         max_scrolls: int = 8,
+        on_visible: Optional[Any] = None,
     ) -> Optional[ConversationPreview]:
         """在当前列表及有限滚动范围内查找会话，不打开任何聊天。
 
@@ -229,6 +230,11 @@ class ConversationListPage(BasePage):
         seen_screens: Set[Tuple[str, ...]] = set()
         for _round in range(max_scrolls + 1):
             entries = self.visible()
+            if callable(on_visible):
+                try:
+                    on_visible(entries)
+                except Exception as exc:
+                    self.log.debug("保存会话列表快照失败: %r", exc)
             for entry in entries:
                 if self._matches(entry, target):
                     return entry

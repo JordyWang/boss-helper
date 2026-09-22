@@ -29,7 +29,8 @@ limits:
 safety:
   # 逐个职位手动确认(全自动模式设为 false;为 true 时点"立即沟通"前在终端确认)
   confirm_before_apply: false
-  # 本地记录:每条动作写入 SQLite(表 records:ts/action/title/salary/company/note)
+  # 本地 SQLite:动作、职位/会话/消息快照和运行观测都会在读取后立即写入。
+  # 默认表: records / jobs / conversations / messages / observations / runs
   records_db: ".state/records.db"
   # 运行状态:每日计数与职位去重 key
   state_path: ".state/state.json"

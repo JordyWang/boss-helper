@@ -50,7 +50,12 @@ class ApplyEngine(ApplyService):
         if chat is None:
             chat = ChatPage(d, cfg.timing, log, self.artifacts)
         if recorder is None and cfg.safety.records_db:
-            recorder = Recorder(cfg.safety.records_db)
+            recorder = Recorder(
+                cfg.safety.records_db,
+                run_id=str(getattr(self.artifacts, "run_id", "") or ""),
+                source="run",
+                log_path=str(getattr(self.artifacts, "log_path", "") or ""),
+            )
         super().__init__(
             home=home,
             detail=detail,

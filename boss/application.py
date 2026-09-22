@@ -9,8 +9,9 @@ from __future__ import annotations
 import logging
 from typing import Any, Callable, Optional, Tuple
 
+from .capture import record_observation, save_job, save_messages
 from .config import AppConfig
-from .domain import Job, JobPreview, RunSummary
+from .domain import Job, JobPreview, RunSummary, Message
 from .filters import JobFilter
 from .ports import ChatPort, DetailPort, HomePort, RecorderPort, StatePort
 
@@ -47,12 +48,57 @@ class ApplyService:
         self._last_result = "unknown"
         self.last_summary = RunSummary()
 
-    def close(self) -> None:
+    def _run_id(self) -> str:
+        artifacts = getattr(self.log, "run_artifacts", None)
+        return str(getattr(artifacts, "run_id", "") or "")
+
+    def _save_job(self, job: Job, source: str) -> None:
+        save_job(
+            self.recorder,
+            job,
+            source=source,
+            run_id=self._run_id(),
+            log=self.log,
+        )
+
+    def _save_messages(self, messages: Any, source: str = "chat") -> None:
+        conversation_id = ""
+        getter = getattr(self.chat, "conversation_id", None)
+        if callable(getter):
+            try:
+                conversation_id = str(getter() or "")
+            except Exception:
+                conversation_id = ""
+        count = save_messages(
+            self.recorder,
+            messages,
+            conversation_id,
+            run_id=self._run_id(),
+            log=self.log,
+        )
+        if count:
+            self.log.debug("已将 %d 条%s消息写入 SQLite", count, source)
+
+    def _observe(self, entity_type: str, entity_id: str, payload: Any) -> None:
+        record_observation(
+            self.recorder,
+            entity_type,
+            entity_id,
+            payload,
+            run_id=self._run_id(),
+            log=self.log,
+        )
+
+    def close(self, *, status: str = "completed") -> None:
         """关闭记录器；可安全重复调用。"""
         if self.recorder is not None:
             recorder, self.recorder = self.recorder, None
             try:
-                recorder.close()
+                try:
+                    recorder.close(status=status)
+                except TypeError:
+                    # 兼容旧版/测试记录器的无参 close()。
+                    recorder.close()
             except Exception as exc:
                 self.log.warning("关闭本地记录失败: %s", exc)
 
@@ -60,7 +106,7 @@ class ApplyService:
         return self
 
     def __exit__(self, exc_type, exc_value, traceback) -> None:
-        self.close()
+        self.close(status="error" if exc_type is not None else "completed")
 
     def _confirm(self, title: str, salary: str, company: str) -> str:
         prompt = (
@@ -128,22 +174,40 @@ class ApplyService:
         if not self.chat.in_chat():
             return
         messages = self.chat.read_messages()
+        self._save_messages(messages, "初始会话")
         self.log.info("会话现状: %s", self.chat.summarize(messages))
         if self.cfg.greeting.send_manual:
             if self.chat.should_send_greeting(messages):
                 self.chat.send_greeting(self.cfg.greeting.messages)
                 messages = self.chat.read_messages(settle_seconds=0.6)
+                self._save_messages(messages, "招呼后")
             else:
                 self.log.info("已打过招呼或领先≥1条,跳过重复招呼语")
         already_sent_resume = self.chat.has_sent_resume(messages)
-        self.chat.handle_resume_dialog(
+        resume_handled = self.chat.handle_resume_dialog(
             self.cfg.greeting.send_resume, already_sent=already_sent_resume
         )
+        if resume_handled:
+            # 同意/拒绝简历等业务节点会在聊天 hierarchy 中表现为 action
+            # 消息；操作完成后再读一次，确保节点立即进入 SQLite。
+            action_text = (
+                "同意"
+                if self.cfg.greeting.send_resume and not already_sent_resume
+                else "拒绝"
+            )
+            self._save_messages(
+                [Message(action_text, "system", "action")], "简历操作"
+            )
+            messages = self.chat.read_messages(settle_seconds=0.6)
+            self._save_messages(messages, "简历操作后")
 
     def _process_job(
         self, job: Job, card: Any, applied_this_run: int
     ) -> Tuple[int, bool, str]:
         """处理一个领域职位，返回 (已投递数, 是否跳转, 结果类型)。"""
+        # 即使职位字段不完整，也先尝试保留这次读取；完整职位会进入 jobs
+        # 表，空字段则由后续流程按 invalid 处理。
+        self._save_job(job, "recommend_card")
         if not job.valid:
             return applied_this_run, False, "invalid"
 
@@ -180,6 +244,16 @@ class ApplyService:
             self.detail.salary() or job.salary,
             job.company,
         )
+        self._save_job(detail_job, "detail")
+        self._observe(
+            "job_detail",
+            detail_job.key,
+            {
+                "title": detail_job.title,
+                "salary": detail_job.salary,
+                "company": detail_job.company,
+            },
+        )
         detail_key = detail_job.key
 
         if self.state.is_seen(detail_key):
@@ -197,6 +271,11 @@ class ApplyService:
             return applied_this_run, True, "error"
 
         self.detail.handle_after_communicate()
+        self._observe(
+            "action",
+            detail_key,
+            {"action": "communicate", "title": detail_job.title, "company": detail_job.company},
+        )
         self._handle_chat()
         self.state.mark_applied([card_key, detail_key])
         applied_this_run += 1
@@ -248,6 +327,7 @@ class ApplyService:
             empty_rounds = 0
             for card in cards:
                 job, _ = self._job_from_card(card)
+                self._save_job(job, "preview")
                 decision = self.filter.check_job(job)
                 previews.append(
                     JobPreview(
@@ -272,6 +352,7 @@ class ApplyService:
         skipped = 0
         errors = 0
         empty_rounds = 0
+        run_status = "completed"
 
         try:
             if not self.home.open_recommend():
@@ -282,6 +363,14 @@ class ApplyService:
                 if self._stop or not self._within_limits(applied):
                     break
                 cards = self.home.job_cards()
+                # 一次读取可能返回多张卡片；先逐张快照，避免只保存实际点
+                # 击的那一张导致其余已获取数据在异常时丢失。
+                for card in cards:
+                    try:
+                        preview_job, _ = self._job_from_card(card)
+                        self._save_job(preview_job, "recommend_screen")
+                    except Exception as exc:
+                        self.log.debug("保存职位屏幕快照失败: %s", exc)
                 if not cards:
                     empty_rounds += 1
                     self.log.info("当前屏无职位卡片,下滑加载 (%d)", empty_rounds)
@@ -311,6 +400,7 @@ class ApplyService:
                         self.log.error("处理卡片出错: %s", exc)
                         try:
                             job, _ = self._job_from_card(card)
+                            self._save_job(job, "error_card")
                             self._record(
                                 "error",
                                 job.title,
@@ -333,6 +423,9 @@ class ApplyService:
                 if not navigated and not self._stop:
                     self.log.info("本屏 %d 个卡片均无需处理,下滑", len(cards))
                     self.home.scroll()
+        except Exception:
+            run_status = "error"
+            raise
         finally:
             self.last_summary = RunSummary(
                 applied=applied,
@@ -341,7 +434,7 @@ class ApplyService:
                 errors=errors,
                 stopped=self._stop,
             )
-            self.close()
+            self.close(status=run_status)
 
         self.log.info(
             "本次运行结束,共建立沟通 %d 个,今日累计 %d",

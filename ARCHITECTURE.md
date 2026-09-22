@@ -11,7 +11,8 @@ application（ApplyService 业务编排）
     ↓
 domain + ports（Job、Message、过滤策略和协议）
 
-设备页面、State、Recorder 是 ports 的基础设施实现。
+设备页面、State、Recorder 是 ports 的基础设施实现。Recorder 同时负责运行
+期间的数据采集落库。
 ```
 
 原子调试操作由 `operations` 注册表驱动：
@@ -37,7 +38,8 @@ cli → OperationContext → OperationSpec(handler)
 
 `filter-check` 只加载配置并在本地评估职位；`health` 连接设备但不会强制
 启动 App；`dry-run` 使用只读状态仓库，只扫描和过滤，不点击卡片、不发送消息、
-也不会落盘修改状态。
+也不会落盘修改投递状态；扫描到的职位快照仍会按统一规则写入 SQLite，便于
+审计本次读取结果。
 
 ## 每次运行的文件归档
 
@@ -56,6 +58,35 @@ logs/20260921_231500/
 
 状态 JSON 使用临时文件写入后 `os.replace` 原子替换；运行锁使用
 `O_CREAT|O_EXCL` 原子创建，避免两个进程同时取得设备控制权。
+
+## 运行期间 SQLite 数据采集
+
+`safety.records_db`（默认 `.state/records.db`）是统一的本地 SQLite 数据库。
+设备/页面每次读到数据后立即调用 Recorder 并提交短事务，不等到整次运行
+结束才落盘；因此中途断开设备时，前面已经获取的内容仍然可查。写入使用
+稳定主键或去重键幂等更新，重复刷新不会复制同一条消息。
+
+主要表：
+
+- `runs`：运行 ID、来源、日志路径和结束状态；
+- `jobs`：推荐卡片/详情职位快照；
+- `conversations`：列表会话摘要（公司、职位、联系人和会话 ID）；
+- `messages`：按“会话 ID + 消息 dedup_key”保存文本、发送方、类型和时间；
+- `observations`：每次读取的追加式观测（包括设备健康和截图路径）；APK
+  版本只在首次检测或版本变化时追加，保持安装基线日志的低噪声约束；
+- `records`：兼容旧版本的投递动作记录。
+
+会话消息的服务端 ID 优先作为去重依据；当前 APK 没有服务端 ID 时继续使用
+已有的内容指纹规则。`records` 表的旧数据无需迁移，启动时会自动补充运行字段。
+
+例如可直接查看最近会话和消息：
+
+```bash
+sqlite3 .state/records.db \
+  'select conversation_id,recruiter,company,job_title,last_seen_at from conversations order by last_seen_at desc;'
+sqlite3 .state/records.db \
+  'select conversation_id,sender,kind,text,timestamp from messages order by first_seen_at;'
+```
 
 ## 聊天消息归档与去重
 

@@ -153,6 +153,37 @@ def record_app_version(
     return current
 
 
+def version_baseline_changed(path: str, current: Optional[Dict[str, Any]]) -> bool:
+    """判断版本基线是否会被本次检测更新。
+
+    ``record_app_version`` 为兼容旧调用始终返回当前版本；运行采集层使用
+    这个轻量检查，只把首次安装检测或版本变化写入观测表，避免每次启动
+    都重复记录相同 APK。
+    """
+    if not path or not isinstance(current, dict):
+        return False
+    try:
+        with open(os.fspath(path), "r", encoding="utf-8") as fh:
+            previous = json.load(fh)
+    except (OSError, ValueError, TypeError):
+        return True
+    if not isinstance(previous, dict):
+        return True
+    return version_values_changed(previous, current)
+
+
+def version_values_changed(
+    previous: Optional[Dict[str, Any]], current: Optional[Dict[str, Any]]
+) -> bool:
+    """比较两个 APK 版本对象，忽略检测时间和 previous 字段。"""
+    if not isinstance(current, dict) or not isinstance(previous, dict):
+        return True
+    return not all(
+        previous.get(key) == current.get(key)
+        for key in ("package", "version_name", "version_code")
+    )
+
+
 def health(d: Any, package: str = "") -> Dict[str, Any]:
     """读取设备和当前页面的只读诊断信息。
 
@@ -180,4 +211,12 @@ def health(d: Any, package: str = "") -> Dict[str, Any]:
     return result
 
 
-__all__ = ["app_version", "connect", "ensure_app", "health", "record_app_version"]
+__all__ = [
+    "app_version",
+    "connect",
+    "ensure_app",
+    "health",
+    "record_app_version",
+    "version_baseline_changed",
+    "version_values_changed",
+]

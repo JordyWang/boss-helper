@@ -5,7 +5,7 @@ import tempfile
 import time
 import unittest
 
-from boss.device import app_version, record_app_version
+from boss.device import app_version, record_app_version, version_values_changed
 
 
 class _Device:
@@ -21,6 +21,16 @@ class _Device:
 
 
 class DeviceVersionTest(unittest.TestCase):
+    def test_version_comparison_ignores_detection_metadata(self):
+        current = {
+            "package": "com.example.app",
+            "version_name": "14.160",
+            "version_code": 1416010,
+        }
+        same = dict(current, detected_at="later", previous={"version_name": "old"})
+        self.assertFalse(version_values_changed(current, same))
+        self.assertTrue(version_values_changed(None, current))
+
     def test_app_version_reads_installed_metadata(self):
         info = app_version(_Device(), "com.example.app")
         self.assertEqual(info["package"], "com.example.app")

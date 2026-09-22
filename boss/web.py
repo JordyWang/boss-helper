@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+import sqlite3
 import threading
 import webbrowser
 from dataclasses import asdict, dataclass
@@ -19,11 +20,13 @@ from typing import Any, Callable, Dict, List, Mapping, Optional
 from urllib.parse import urlparse
 
 from .artifacts import RunArtifacts, RunInProgressError
+from .capture import record_observation, save_conversation
 from .config import AppConfig, load_config
 from .logger import close_logger, setup_logger
 from .operations import OperationContext, run_operation
 from .pages.chat import ChatPage
 from .pages.conversations import ConversationListPage
+from .records import Recorder
 from .state import State
 
 
@@ -80,7 +83,7 @@ INDEX_HTML = r"""<!doctype html>
       color: #24558f; border: 1px solid #d2e5ff; min-height: 42px; }
     .status.error { background: #fff1f0; color: var(--danger); border-color: #ffd4d0; }
     .status.ok { background: #ecfdf3; color: var(--ok); border-color: #b7ebcc; }
-    .overview { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr));
+    .overview { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr));
       gap: 12px; margin-bottom: 14px; }
     .metric { background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
       box-shadow: var(--shadow); padding: 14px 16px; }
@@ -109,6 +112,7 @@ INDEX_HTML = r"""<!doctype html>
     .message-meta { color: var(--muted); font-size: 11px; margin-bottom: 2px; }
     .message-action { color: #8a5a00; background: #fff8e8; border-radius: 5px; padding: 2px 6px; }
     .run-path { padding: 12px 16px; color: var(--muted); font-size: 12px; border-top: 1px solid var(--line); word-break: break-all; }
+    @media (max-width: 1100px) { .overview { grid-template-columns: repeat(3, 1fr); } }
     @media (max-width: 900px) { .grid { grid-template-columns: 1fr; } .overview { grid-template-columns: repeat(2, 1fr); } .hint { width: 100%; margin-left: 0; } }
   </style>
 </head>
@@ -123,6 +127,7 @@ INDEX_HTML = r"""<!doctype html>
       <div class="metric"><div class="metric-label">单次默认上限</div><div id="runMetric" class="metric-value">—</div></div>
       <div class="metric"><div class="metric-label">APK 版本</div><div id="versionMetric" class="metric-value">—</div></div>
       <div class="metric"><div class="metric-label">设备状态</div><div id="deviceMetric" class="metric-value">未检查</div></div>
+      <div class="metric"><div class="metric-label">SQLite 已采集</div><div id="storageMetric" class="metric-value">—</div></div>
     </section>
     <section class="toolbar" style="margin-bottom:14px">
       <span class="action-title">运行操作</span>
@@ -212,7 +217,7 @@ INDEX_HTML = r"""<!doctype html>
       finally { setBusy(false); }
     }
     async function dashboard() {
-      try { const data = await request('/api/dashboard'); $('todayMetric').textContent = `${data.applied_today} / ${data.daily_limit}`; $('runMetric').textContent = data.run_limit; $('versionMetric').textContent = data.version.version_name || '未记录'; }
+      try { const data = await request('/api/dashboard'); $('todayMetric').textContent = `${data.applied_today} / ${data.daily_limit}`; $('runMetric').textContent = data.run_limit; $('versionMetric').textContent = data.version.version_name || '未记录'; const s = data.storage || {}; $('storageMetric').textContent = `会话 ${s.conversations || 0} · 消息 ${s.messages || 0}`; }
       catch (error) { setStatus(error.message, 'error'); }
     }
     async function health() {
@@ -276,6 +281,7 @@ class ConversationWebService:
         self._list_page_factory = list_page_factory
         self._chat_page_factory = chat_page_factory
         self._lock = threading.Lock()
+        self._active_recorder: Optional[Recorder] = None
 
     @staticmethod
     def _default_device_factory(serial: str, log: logging.Logger) -> Any:
@@ -294,28 +300,63 @@ class ConversationWebService:
         """取得进程内锁、运行归档和设备锁后执行一个动作。"""
         with self._lock:
             artifacts: Optional[RunArtifacts] = None
+            recorder: Optional[Recorder] = None
             logger_ready = False
             result: Dict[str, Any] = {}
+            run_status = "completed"
             try:
                 artifacts = RunArtifacts.create(self.settings.logs_dir)
                 log = setup_logger(artifacts=artifacts)
                 logger_ready = True
                 cfg = load_config(self.settings.config_path)
+                if cfg.safety.records_db:
+                    recorder = Recorder(
+                        cfg.safety.records_db,
+                        run_id=artifacts.run_id,
+                        source="web",
+                        log_path=str(artifacts.log_path),
+                    )
+                    self._active_recorder = recorder
+                    log.info("运行数据 SQLite: %s", cfg.safety.records_db)
                 factory = self._device_factory or self._default_device_factory
                 device = factory(cfg.serial, log)
-                from .device import ensure_app, record_app_version
+                from .device import ensure_app, record_app_version, version_values_changed
 
-                record_app_version(device, cfg.package, cfg.safety.app_version_path, log)
+                baseline = None
+                try:
+                    baseline_value = json.loads(
+                        Path(cfg.safety.app_version_path).read_text(encoding="utf-8")
+                    )
+                    if isinstance(baseline_value, dict):
+                        baseline = baseline_value
+                except (OSError, ValueError, TypeError):
+                    pass
+                version = record_app_version(
+                    device, cfg.package, cfg.safety.app_version_path, log
+                )
+                if version and version_values_changed(baseline, version):
+                    record_observation(
+                        recorder,
+                        "apk_version",
+                        str(version.get("package", cfg.package) or cfg.package),
+                        version,
+                        run_id=artifacts.run_id,
+                        log=log,
+                    )
                 if ensure_application:
                     ensure_app(device, cfg.package, log)
                 result = callback(cfg, device, log, artifacts) or {}
                 result["ok"] = bool(result.get("ok", True))
+                if not result["ok"]:
+                    run_status = "error"
                 result["run_id"] = artifacts.run_id
                 result["log_path"] = str(artifacts.log_path)
                 return result
             except RunInProgressError as exc:
+                run_status = "error"
                 return {"ok": False, "busy": True, "error": str(exc)}
             except Exception as exc:
+                run_status = "error"
                 result = {
                     "ok": False,
                     "error": str(exc) or exc.__class__.__name__,
@@ -327,6 +368,9 @@ class ConversationWebService:
             finally:
                 # close_logger 会关闭文件 handler 并释放其关联的 RunArtifacts；
                 # 没有成功安装 logger 时，再由显式 close 兜底。
+                if recorder is not None:
+                    recorder.close(status=run_status)
+                self._active_recorder = None
                 if logger_ready:
                     close_logger()
                 if artifacts is not None and getattr(
@@ -344,7 +388,17 @@ class ConversationWebService:
             page = self._list_page_factory(device, cfg.timing, log, artifacts)
             if not page.open_list():
                 raise WebOperationError("无法打开 Boss 消息列表")
-            entries = [entry.as_dict() for entry in page.visible()]
+            visible = page.visible()
+            for entry in visible:
+                save_conversation(
+                    self._active_recorder,
+                    entry,
+                    run_id=artifacts.run_id,
+                    source="list",
+                    include_messages=False,
+                    log=log,
+                )
+            entries = [entry.as_dict() for entry in visible]
             return {"entries": entries, "opened": False}
 
         return self._run(action)
@@ -354,6 +408,47 @@ class ConversationWebService:
         try:
             cfg = load_config(self.settings.config_path)
             state = State(cfg.safety.state_path, read_only=True)
+            storage: Dict[str, Any] = {
+                "path": cfg.safety.records_db,
+                "runs": 0,
+                "records": 0,
+                "jobs": 0,
+                "conversations": 0,
+                "messages": 0,
+                "observations": 0,
+            }
+            # dashboard 是只读接口，不通过 Recorder 打开可写连接；这样即使
+            # 用户只查看页面，也不会创建/修改 SQLite 文件。
+            if cfg.safety.records_db and Path(cfg.safety.records_db).exists():
+                try:
+                    conn = sqlite3.connect(
+                        f"file:{Path(cfg.safety.records_db).resolve()}?mode=ro",
+                        uri=True,
+                        timeout=1.0,
+                    )
+                    try:
+                        for table in (
+                            "runs",
+                            "records",
+                            "jobs",
+                            "conversations",
+                            "messages",
+                            "observations",
+                        ):
+                            try:
+                                storage[table] = int(
+                                    conn.execute(
+                                        f"SELECT COUNT(*) FROM {table}"
+                                    ).fetchone()[0]
+                                )
+                            except sqlite3.Error:
+                                # 旧数据库可能尚未完成迁移，单表缺失不影响
+                                # 页面其余状态显示。
+                                storage[table] = 0
+                    finally:
+                        conn.close()
+                except (OSError, sqlite3.Error):
+                    pass
             version: Dict[str, Any] = {}
             try:
                 value = json.loads(
@@ -370,6 +465,7 @@ class ConversationWebService:
                 "run_limit": cfg.limits.max_apply_per_run,
                 "package": cfg.package,
                 "version": version,
+                "storage": storage,
             }
         except Exception as exc:
             return {"ok": False, "error": str(exc) or exc.__class__.__name__}
@@ -384,6 +480,14 @@ class ConversationWebService:
             from .device import health
 
             info = health(device, cfg.package)
+            record_observation(
+                self._active_recorder,
+                "device_health",
+                str(info.get("package", "") or ""),
+                info,
+                run_id=artifacts.run_id,
+                log=log,
+            )
             log.info(
                 "可视化界面设备检查: package=%s android=%s model=%s",
                 info.get("package", "?"),
@@ -417,7 +521,14 @@ class ConversationWebService:
             # 浏览器已经显式二次确认，不能在无终端的 Web 进程中调用 input()。
             cfg.safety.confirm_before_apply = False
             state = State(cfg.safety.state_path)
-            engine = ApplyEngine(device, cfg, state, log, artifacts=artifacts)
+            engine = ApplyEngine(
+                device,
+                cfg,
+                state,
+                log,
+                artifacts=artifacts,
+                recorder=self._active_recorder,
+            )
             applied = engine.run()
             return {
                 "applied": applied,
@@ -437,6 +548,14 @@ class ConversationWebService:
         ) -> Dict[str, Any]:
             dump_path = artifacts.save_dump(device, "dump.xml")
             screenshot_path = artifacts.save_screenshot(device, "screenshot.png")
+            record_observation(
+                self._active_recorder,
+                "capture",
+                artifacts.run_id,
+                {"dump_path": dump_path, "screenshot_path": screenshot_path},
+                run_id=artifacts.run_id,
+                log=log,
+            )
             log.info("界面诊断已保存: %s, %s", dump_path, screenshot_path)
             return {"dump_path": dump_path, "screenshot_path": screenshot_path}
 
@@ -501,6 +620,7 @@ class ConversationWebService:
                 chat=chat,
                 conversations=listing,
                 artifacts=artifacts,
+                recorder=self._active_recorder,
             )
             code = run_operation(ctx)
             payloads = self._archive_payloads(artifacts.directory)

@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import json
 import logging
 import os
 import sys
@@ -62,48 +63,93 @@ def cmd_op(args: Any) -> int:
 
     artifacts = getattr(args, "artifacts", None) or getattr(log, "run_artifacts", None)
     ctx = OperationContext(args=args, cfg=cfg, log=log, artifacts=artifacts)
+    recorder = None
 
     # 在连接/启动 App 之前拦截所有未确认的真实动作。
     if operation_requires_confirmation(spec, args):
         log.error("%s 会产生真实副作用,确认请加 --yes", spec.name)
         return 2
 
-    if spec.requires_device:
-        from .device import connect, ensure_app, record_app_version
+    run_status = "completed"
+    try:
+        # 所有需要读取设备数据的原子操作共享同一份 SQLite 采集仓库；
+        # save_* 方法会在每次读取后立即提交，命令中途异常也不会丢失前面
+        # 已获取的职位/会话/消息。先创建仓库，再连接设备，便于 APK/健康
+        # 信息也能作为本次运行的第一批观测写入。
+        if spec.requires_device and cfg.safety.records_db:
+            from .records import Recorder
 
-        ctx.device = connect(cfg.serial, log)
-        record_app_version(
-            ctx.device,
-            cfg.package,
-            cfg.safety.app_version_path,
-            log,
-        )
-        if spec.ensure_app:
-            ensure_app(ctx.device, cfg.package, log)
+            recorder = Recorder(
+                cfg.safety.records_db,
+                run_id=str(getattr(artifacts, "run_id", "") or ""),
+                source=f"op:{spec.name}",
+                log_path=str(getattr(artifacts, "log_path", "") or ""),
+            )
+            ctx.recorder = recorder
+            log.info("运行数据 SQLite: %s", cfg.safety.records_db)
 
-    # 只为操作声明过的依赖创建对象，避免健康检查/本地过滤产生无关副作用。
-    pages = set(spec.pages)
-    if pages:
-        from .pages.chat import ChatPage
-        from .pages.conversations import ConversationListPage
-        from .pages.home import HomePage
-        from .pages.job_detail import JobDetailPage
+        if spec.requires_device:
+            from .device import connect, ensure_app, record_app_version, version_values_changed
 
-    if "home" in pages:
-        ctx.home = HomePage(ctx.device, cfg.timing, log, artifacts)
-    if "detail" in pages:
-        ctx.detail = JobDetailPage(ctx.device, cfg.timing, log, artifacts)
-    if "chat" in pages:
-        ctx.chat = ChatPage(ctx.device, cfg.timing, log, artifacts)
-    if "conversations" in pages:
-        ctx.conversations = ConversationListPage(ctx.device, cfg.timing, log, artifacts)
-    if spec.requires_state:
-        ctx.state = State(
-            cfg.safety.state_path,
-            read_only=spec.state_read_only,
-        )
+            ctx.device = connect(cfg.serial, log)
+            baseline = None
+            try:
+                with open(cfg.safety.app_version_path, "r", encoding="utf-8") as fh:
+                    baseline = json.load(fh)
+            except (OSError, ValueError, TypeError):
+                pass
+            version = record_app_version(
+                ctx.device,
+                cfg.package,
+                cfg.safety.app_version_path,
+                log,
+            )
+            if version and version_values_changed(baseline, version):
+                from .capture import record_observation
 
-    return run_operation(ctx)
+                record_observation(
+                    recorder,
+                    "apk_version",
+                    str(version.get("package", cfg.package) or cfg.package),
+                    version,
+                    run_id=str(getattr(artifacts, "run_id", "") or ""),
+                    log=log,
+                )
+            if spec.ensure_app:
+                ensure_app(ctx.device, cfg.package, log)
+
+        # 只为操作声明过的依赖创建对象，避免健康检查/本地过滤产生无关副作用。
+        pages = set(spec.pages)
+        if pages:
+            from .pages.chat import ChatPage
+            from .pages.conversations import ConversationListPage
+            from .pages.home import HomePage
+            from .pages.job_detail import JobDetailPage
+
+        if "home" in pages:
+            ctx.home = HomePage(ctx.device, cfg.timing, log, artifacts)
+        if "detail" in pages:
+            ctx.detail = JobDetailPage(ctx.device, cfg.timing, log, artifacts)
+        if "chat" in pages:
+            ctx.chat = ChatPage(ctx.device, cfg.timing, log, artifacts)
+        if "conversations" in pages:
+            ctx.conversations = ConversationListPage(ctx.device, cfg.timing, log, artifacts)
+        if spec.requires_state:
+            ctx.state = State(
+                cfg.safety.state_path,
+                read_only=spec.state_read_only,
+            )
+
+        code = run_operation(ctx)
+        if code != 0:
+            run_status = "error"
+        return code
+    except Exception:
+        run_status = "error"
+        raise
+    finally:
+        if recorder is not None:
+            recorder.close(status=run_status)
 
 
 def cmd_conversations(args: Any) -> int:
@@ -168,11 +214,19 @@ def cmd_records(args: Any) -> int:
     rec = Recorder(path)
     try:
         counts = rec.counts()
+        data_counts = rec.counts_by_table()
         log.info(
             "%s  共 %d 条%s",
             path,
             rec.total(),
             f"  ({', '.join(f'{k}={v}' for k, v in counts.items())})" if counts else "",
+        )
+        log.info(
+            "采集数据: jobs=%d conversations=%d messages=%d observations=%d",
+            data_counts.get("jobs", 0),
+            data_counts.get("conversations", 0),
+            data_counts.get("messages", 0),
+            data_counts.get("observations", 0),
         )
         if args.format == "csv":
             writer = csv.writer(sys.stdout, lineterminator="\n")

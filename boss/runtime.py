@@ -6,11 +6,14 @@
 from __future__ import annotations
 
 import logging
+import json
 from typing import Any, Optional
 
 from .artifacts import RunArtifacts
+from .capture import record_observation
 from .config import AppConfig
 from .engine import ApplyEngine
+from .records import Recorder
 from .state import State
 
 
@@ -27,14 +30,51 @@ def create_engine(
 
         device = connect(cfg.serial, log)
 
-    from .device import ensure_app, record_app_version
+    recorder = None
+    if cfg.safety.records_db:
+        recorder = Recorder(
+            cfg.safety.records_db,
+            run_id=str(getattr(artifacts, "run_id", "") or ""),
+            source="run",
+            log_path=str(getattr(artifacts, "log_path", "") or ""),
+        )
+        log.info("运行数据 SQLite: %s", cfg.safety.records_db)
 
-    # 先记录安装基线，再按需要把 App 切到前台；版本未变化时不会重复写入。
-    record_app_version(device, cfg.package, cfg.safety.app_version_path, log)
-    ensure_app(device, cfg.package, log)
-    if state is None:
-        state = State(cfg.safety.state_path)
-    return ApplyEngine(device, cfg, state, log, artifacts=artifacts)
+    try:
+        from .device import ensure_app, record_app_version, version_values_changed
+
+        # 先记录安装基线，再按需要把 App 切到前台；版本未变化时不会重复写入。
+        baseline_path = cfg.safety.app_version_path
+        try:
+            with open(baseline_path, "r", encoding="utf-8") as fh:
+                baseline = json.load(fh)
+        except (OSError, ValueError, TypeError):
+            baseline = None
+        version = record_app_version(device, cfg.package, cfg.safety.app_version_path, log)
+        if version and version_values_changed(baseline, version):
+            record_observation(
+                recorder,
+                "apk_version",
+                str(version.get("package", cfg.package) or cfg.package),
+                version,
+                run_id=str(getattr(artifacts, "run_id", "") or ""),
+                log=log,
+            )
+        ensure_app(device, cfg.package, log)
+        if state is None:
+            state = State(cfg.safety.state_path)
+        return ApplyEngine(
+            device,
+            cfg,
+            state,
+            log,
+            artifacts=artifacts,
+            recorder=recorder,
+        )
+    except Exception:
+        if recorder is not None:
+            recorder.close(status="error")
+        raise
 
 
 __all__ = ["create_engine"]

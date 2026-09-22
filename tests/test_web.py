@@ -142,6 +142,8 @@ class WebServiceTest(unittest.TestCase):
                 with opener.open(base + "/api/dashboard", timeout=2) as response:
                     dashboard = json.loads(response.read().decode("utf-8"))
                 self.assertTrue(dashboard["ok"])
+                self.assertIn("storage", dashboard)
+                self.assertIn("messages", dashboard["storage"])
             finally:
                 server.shutdown()
                 server.server_close()
